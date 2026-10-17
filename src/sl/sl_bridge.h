@@ -70,6 +70,8 @@ struct FgStatus {
     uint32_t framesPresented = 0; // frames presented per rendered frame (DLSS-G state)
     uint32_t status = 0;          // sl::DLSSGStatus bits
     double baseFps = 0.0;         // rendered (non-generated) frames per second
+    uint32_t refreshHz = 0;       // monitor refresh rate
+    double outputCapFps = 0.0;    // output cap applied while frame generation runs (0 = none)
 };
 FgStatus GetFgStatus();
 

@@ -272,6 +272,29 @@ Runtime files: `winmm.dll` and `EnshroudedFG.ini` go next to the exe. The SL DLL
 - **Game updates:** survive them through export hooks and signature scans, not hardcoded addresses.
 - **Packaging:** `install.ps1` copies the files into the game folder and backs up anything it replaces. `uninstall.ps1` restores it.
 
+**Phase 7 status (2026-10-17): ✅ done (v0.7.2), packaged as `dist/EnshroudedFG-0.7.2.zip` via `tools/package.ps1`.**
+
+**Output cap (`[FrameGen] OutputCap` = off | auto | fps; menu radio)**
+- Uses the Reflex frame limiter. **While DLSS-G runs, the driver applies `frameLimitUs` to presented frames.**
+  - Measured in v0.7.1 on a 280 Hz display with a 272 fps limit: output held at 271–278 fps and rendered fps settled at 272/N (45 at 6x, 55 at 5x, 68 at 4x, 90 at 3x).
+  - v0.7.0 had wrongly assumed the limit applies to rendered frames, which pushed rendered fps down to 18–28.
+- **User verdict:** the cap feels worse at 6x, because rendering drops to 45 fps. 2x without a cap feels best, since ~110–140 rendered fps already fills 280 Hz.
+- So the cap **defaults to off**. The menu shows a tip with the multiplier that fits the display.
+
+**Present mode (`[Display] PresentMode` = game | immediate | mailbox | fifo)**
+- Overrides the game's swapchain present mode if the surface supports the requested one. It applies when the game recreates its swapchain.
+
+**Ini, logging and menu fixes**
+- Every option is written with its default.
+- The stray `; Multiplier` lines are removed by filtering the file text, because the profile API can't delete `;` lines.
+- `[Debug] VerboseLog=0` keeps lookup and `GetProcAddress` diagnostics off by default.
+- The menu's duplicate "Off" ImGui IDs made the cap's "Off" button switch frame generation off. Fixed with `##outputcap` and `PushID` around the multiplier buttons.
+
+**Package**
+- Contents: `winmm.dll`, `README.txt` (requirements, install/uninstall, menu, ini, notes) and `EnshroudedFG\streamline\` with the NVIDIA-signed SL 2.14.16 DLLs (signatures checked during packaging).
+- Licences included: Streamline, DLSS, Reflex, MinHook and ImGui.
+- Review NVIDIA's licence terms before redistributing the package publicly.
+
 ## Key risks
 - **Manual hooking:** SL Vulkan manual hooking is documented as "advanced integration only". Running an injected `sl.interposer` next to the game's own NGX instance is untested, so Phase 3 is the go/no-go gate.
 - **Camera matrices:** the approximation may not be good enough, and step B is a reverse-engineering effort of unknown size.

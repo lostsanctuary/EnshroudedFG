@@ -19,6 +19,7 @@
 #include <string>
 #include <unordered_set>
 
+#include "core/config.h"
 #include "core/module_ranges.h"
 #include "hooks/hook_util.h"
 #include "debug/frame_trace.h"
@@ -52,6 +53,7 @@ std::atomic<PFN_vkLatencySleepNV> g_realLatencySleep{nullptr};
 std::atomic<PFN_vkSetLatencyMarkerNV> g_realSetLatencyMarker{nullptr};
 
 VkInstance g_mainInstance = VK_NULL_HANDLE;
+VkPhysicalDevice g_mainPhysicalDevice = VK_NULL_HANDLE;
 std::atomic<unsigned long long> g_frame{0};
 std::atomic<int> g_markerLogBudget{48};
 std::atomic<int> g_presentLogBudget{3};
@@ -184,6 +186,7 @@ VKAPI_ATTR VkResult VKAPI_CALL HookCreateDevice(VkPhysicalDevice pd, const VkDev
     EFG_LOG("vkCreateDevice via %s -> %d, device %p", proxy ? "SL proxy" : "native", r,
             r == VK_SUCCESS ? (void*)*out : nullptr);
     if (r == VK_SUCCESS && proxy) {
+        g_mainPhysicalDevice = pd;
         sl::OnDeviceCreated(pd, *out);
         overlay::OnDevice(g_mainInstance, pd, *out);
     }
@@ -201,10 +204,38 @@ VKAPI_ATTR void VKAPI_CALL HookDestroyDevice(VkDevice device, const VkAllocation
 
 // ---- swapchain / present --------------------------------------------------------------------
 
+// [Display] PresentMode: replace the game's present mode if the surface supports the requested one.
+const VkSwapchainCreateInfoKHR* OverridePresentMode(const VkSwapchainCreateInfoKHR* ci, VkSwapchainCreateInfoKHR& storage) {
+    static const VkPresentModeKHR kModes[] = {VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR,
+                                              VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_FIFO_KHR};
+    const VkPresentModeKHR wanted = kModes[LoadConfig().presentModeOverride & 3];
+    if (wanted == ci->presentMode) return ci;
+    auto getModes = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfacePresentModesKHR>(
+        RealInstanceProc(g_mainInstance, "vkGetPhysicalDeviceSurfacePresentModesKHR"));
+    uint32_t n = 0;
+    VkPresentModeKHR modes[16]{};
+    if (!getModes || getModes(g_mainPhysicalDevice, ci->surface, &n, nullptr) != VK_SUCCESS) return ci;
+    if (n > 16) n = 16;
+    getModes(g_mainPhysicalDevice, ci->surface, &n, modes);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (modes[i] == wanted) {
+            storage = *ci;
+            storage.presentMode = wanted;
+            EFG_LOG("present mode override: %s -> %s", PresentModeName(ci->presentMode), PresentModeName(wanted));
+            return &storage;
+        }
+    }
+    EFG_LOG("present mode override: %s not supported by the surface, keeping %s", PresentModeName(wanted),
+            PresentModeName(ci->presentMode));
+    return ci;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL HookCreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR* ci,
                                                    const VkAllocationCallbacks* alloc, VkSwapchainKHR* out) {
     const bool fromGame = FromGame(_ReturnAddress());
     const bool viaSl = fromGame && sl::DeviceActive(device);
+    VkSwapchainCreateInfoKHR modified;
+    if (viaSl && LoadConfig().presentModeOverride) ci = OverridePresentMode(ci, modified);
     VkResult r;
     if (viaSl) {
         SlCallScope scope;
@@ -377,6 +408,7 @@ std::unordered_set<std::string> g_lookedUp;
 constexpr size_t kMaxLoggedLookups = 300;
 
 void LogLookup(const char* api, const void* handle, const char* name, PFN_vkVoidFunction real) {
+    if (!LoadConfig().verboseLog) return;
     std::lock_guard lock(g_lookupMutex);
     if (g_lookedUp.size() >= kMaxLoggedLookups) return;
     if (!g_lookedUp.insert(std::string(api) + name).second) return;

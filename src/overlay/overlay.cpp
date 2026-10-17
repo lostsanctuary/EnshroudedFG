@@ -270,11 +270,34 @@ void DrawMenu() {
         const bool supported = value == 1 || st.maxMultiplier == 0 || static_cast<uint32_t>(value) <= st.maxMultiplier;
         if (i) ImGui::SameLine();
         ImGui::BeginDisabled(!supported || !st.slActive);
+        ImGui::PushID(i);
         if (ImGui::RadioButton(kLabels[i], cfg.multiplier == value)) SetMultiplier(value);
+        ImGui::PopID();
         ImGui::EndDisabled();
         if (!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Not supported on this GPU (max %ux)", st.maxMultiplier);
     }
+    ImGui::TextUnformatted("Output cap");
+    if (ImGui::RadioButton("Off##outputcap", cfg.outputCap == 0)) SetOutputCap(0);
+    ImGui::SameLine();
+    char autoLabel[64];
+    if (st.refreshHz)
+        snprintf(autoLabel, sizeof(autoLabel), "Auto (%.0f fps, %u Hz display)", st.refreshHz * 0.97, st.refreshHz);
+    else
+        snprintf(autoLabel, sizeof(autoLabel), "Auto (display refresh)");
+    if (ImGui::RadioButton(autoLabel, cfg.outputCap < 0)) SetOutputCap(-1);
+    if (cfg.outputCap > 0) {
+        ImGui::SameLine();
+        ImGui::RadioButton("Custom (ini)", true);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%d fps", cfg.outputCap);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Keeps the displayed frame rate at or below the cap (Reflex limiter).\n"
+                          "Rendering then runs at cap / multiplier, which adds latency at high multipliers.\n"
+                          "Usually better: pick the multiplier whose output matches your refresh rate.");
+    ImGui::Spacing();
+
     bool gameCamera = cfg.useGameCamera;
     if (ImGui::Checkbox("Use game camera data", &gameCamera)) SetUseGameCamera(gameCamera);
     if (ImGui::IsItemHovered())
@@ -293,7 +316,18 @@ void DrawMenu() {
     if (st.status) ImGui::TextColored(ImVec4(1, 0.6f, 0.2f, 1), "DLSS-G status flags: 0x%x", st.status);
     ImGui::Text("Rendered: %.0f fps   Expected output: ~%.0f fps", st.baseFps,
                 st.baseFps * (cfg.multiplier > 1 ? cfg.multiplier : 1));
+    if (st.outputCapFps > 0)
+        ImGui::Text("Output capped at %.0f fps -> rendering limited to %.0f fps at %dx", st.outputCapFps,
+                    st.outputCapFps / (cfg.multiplier > 1 ? cfg.multiplier : 1), cfg.multiplier);
     if (st.maxMultiplier) ImGui::TextDisabled("This GPU supports up to %ux.", st.maxMultiplier);
+    if (st.refreshHz && st.baseFps > 1 && cfg.outputCap == 0) {
+        const int fit = static_cast<int>(st.refreshHz / st.baseFps);
+        ImGui::TextDisabled("Tip: at %.0f rendered fps, %dx already reaches your %u Hz display.", st.baseFps,
+                            fit < 2 ? 2 : (fit > 6 ? 6 : fit), st.refreshHz);
+    }
+    static const char* kModes[] = {"as the game requests", "immediate (no vsync)", "mailbox", "fifo (vsync)"};
+    ImGui::TextDisabled("Present mode: %s - [Display] PresentMode in the ini, applies after restart.",
+                        kModes[cfg.presentModeOverride]);
 
     ImGui::Separator();
     ImGui::TextDisabled("%s closes this menu. Changes are saved to EnshroudedFG.ini.", KeyName(cfg.overlayKey));
@@ -426,6 +460,7 @@ void OnDeviceDestroying(VkDevice device) {
 }
 
 bool Visible() { return g_visible.load(); }
+HWND Window() { return g_hwnd; }
 
 const VkPresentInfoKHR* BeforePresent(VkQueue queue, const VkPresentInfoKHR* info, VkPresentInfoKHR& storage) {
     if (!g_visible.load() || !g_vkReady || !g_imguiContext || !info || info->swapchainCount != 1 ||

@@ -86,6 +86,9 @@ uint32_t g_framesToGenerateMax = 0;
 uint32_t g_framesPresented = 0;  // last DLSS-G numFramesActuallyPresented
 uint32_t g_dlssgStatus = 0;
 double g_baseFps = 0.0;          // EMA of rendered frames per second
+uint32_t g_frameLimitUs = 0;     // Reflex frame limit currently applied (0 = none)
+uint32_t g_refreshHz = 0;        // refresh rate of the monitor showing the game
+double g_outputCapFps = 0.0;     // effective output cap while frame generation runs
 LARGE_INTEGER g_lastPresentQpc{};
 SrInputs g_lastSr{};
 constexpr int kStreakToEnable = 3;  // world frames required before turning FG on (avoids menu flicker)
@@ -456,6 +459,44 @@ void TagNull() {
     p_slSetTagForFrame(*g_frame, sl::ViewportHandle(0), tags, 3, nullptr);
 }
 
+uint32_t QueryRefreshRate() {
+    HWND hwnd = overlay::Window();
+    HMONITOR mon = MonitorFromWindow(hwnd ? hwnd : GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    DEVMODEW dm{};
+    dm.dmSize = sizeof(dm);
+    if (!GetMonitorInfoW(mon, &mi) || !EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) return 0;
+    return dm.dmDisplayFrequency > 1 ? dm.dmDisplayFrequency : 0;
+}
+
+// Output cap through the Reflex frame limiter. While DLSS-G runs, the driver applies frameLimitUs to
+// presented frames (measured in-game: a 272 fps limit gave ~272 fps output and 272/N rendered fps), so
+// the limit is simply the output interval. Off by default: it lowers rendered fps at high multipliers.
+void ApplyFrameLimit() {
+    if (!p_slReflexSetOptions) return;
+    const Config& cfg = LoadConfig();
+    double cap = 0;
+    if (g_fgOn && cfg.outputCap != 0) {
+        if (cfg.outputCap > 0) cap = cfg.outputCap;
+        else if (g_refreshHz) cap = g_refreshHz * 0.97;
+    }
+    g_outputCapFps = cap;
+    uint32_t limitUs = cap > 0 ? static_cast<uint32_t>(1e6 / cap) : 0;
+    if (limitUs == g_frameLimitUs) return;
+    sl::ReflexOptions ro{};
+    ro.mode = sl::ReflexMode::eLowLatency;
+    ro.frameLimitUs = limitUs;
+    sl::Result r;
+    {
+        SlCallScope scope;
+        r = p_slReflexSetOptions(ro);
+    }
+    EFG_LOG("output cap: %s -> Reflex frame limit %u us (%.0f fps, refresh %u Hz, %ux) -> %s", cap > 0 ? "on" : "off",
+            limitUs, limitUs ? 1e6 / limitUs : 0.0, g_refreshHz, g_fgFrames + 1, ResultName(r));
+    if (r == sl::Result::eOk) g_frameLimitUs = limitUs;
+}
+
 // Applies DLSS-G on/off and the configured multiplier; only calls into SL when either changes, so the
 // overlay can switch 2x..6x live.
 void SetFrameGeneration(bool on) {
@@ -756,6 +797,7 @@ void BeforePresent() {
                         !overlay::Visible();
     if (!g_frameHasSr) TagNull();
     SetFrameGeneration(wantFg);
+    ApplyFrameLimit();
 
     Marker(sl::PCLMarker::eRenderSubmitEnd);
     Marker(sl::PCLMarker::ePresentStart);
@@ -776,6 +818,14 @@ void AfterPresent(unsigned long long presentCount) {
         if (dt > 0) g_baseFps = g_baseFps > 0 ? g_baseFps * 0.95 + (1.0 / dt) * 0.05 : 1.0 / dt;
     }
     g_lastPresentQpc = now;
+    if (presentCount == 2 || presentCount % 600 == 0) g_refreshHz = QueryRefreshRate();
+    static LARGE_INTEGER lastCapLog{};
+    if (g_frameLimitUs && LoadConfig().verboseLog &&
+        double(now.QuadPart - lastCapLog.QuadPart) / double(freq.QuadPart) > 2.0) {
+        lastCapLog = now;
+        EFG_LOG("output cap check: rendered %.1f fps at %ux -> ~%.0f fps output (cap %.0f)", g_baseFps, g_fgFrames + 1,
+                g_baseFps * (g_fgFrames + 1), g_outputCapFps);
+    }
     if (overlay::Visible() && presentCount % 30 == 0 && p_slDLSSGGetState) {
         sl::DLSSGState st{};
         SlCallScope scope;
@@ -877,6 +927,8 @@ FgStatus GetFgStatus() {
     s.framesPresented = g_framesPresented;
     s.status = g_dlssgStatus;
     s.baseFps = g_baseFps;
+    s.refreshHz = g_refreshHz;
+    s.outputCapFps = g_outputCapFps;
     return s;
 }
 

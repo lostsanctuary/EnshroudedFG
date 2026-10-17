@@ -18,6 +18,7 @@ void OnSwapchainDestroyed(VkSwapchainKHR swapchain);
 void OnDeviceDestroying(VkDevice device);
 
 bool Visible();
+HWND Window();  // the game window (null until its surface is created)
 
 // Draws the menu (when visible) into the image being presented and returns the present info to use
 // (its wait semaphores replaced by ours). `storage` holds the modified struct.
