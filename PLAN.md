@@ -295,6 +295,48 @@ Runtime files: `winmm.dll` and `EnshroudedFG.ini` go next to the exe. The SL DLL
 - Licences included: Streamline, DLSS, Reflex, MinHook and ImGui.
 - Review NVIDIA's licence terms before redistributing the package publicly.
 
+### Phase 8: Auto multiplier (hand-rolled dynamic MFG)
+Streamline's Dynamic MFG is D3D12-only (`bIsDynamicMFGSupported` reads 0 here), so Auto is our own controller: `UpdateAutoMultiplier` in `src/sl/sl_bridge.cpp`, run from `AfterPresent`. It changes N through the existing live `slDLSSGSetOptions` path.
+
+**Phase 8 status (2026-10-17): ✅ done (v0.8.0). Commits f440212, e50877d and 0674350, then the version bump.**
+
+**Auto (`[FrameGen] Multiplier=auto`, menu radio "Auto (Nx)")**
+- **Goal:** pick N in [2, max] so that rendered fps × N just fills the display (target = refresh × 0.97).
+- **Timing:** evaluated every 2 s while FG runs. It waits a full interval after FG turns on (menus, loading) and after each change.
+- **Prediction:** output at another multiplier M is predicted as rendered × M × keep^(M−N), where keep is the share of rendered fps that survives one more generated frame.
+- **Step down:** when output is more than 5% above target, go to the largest M predicted to stay at or below target (minimum 2). Multipliers above stay blocked for 10 s.
+- **Step up:** to the largest M still predicted below target.
+- **Logging:** each change is logged as `auto: rendered X fps xN = Y fps output, target T (Hz), cap C, keep K/step -> Mx (reason)`. `VerboseLog=1` also logs every evaluation.
+
+**Finding 1, fast EMA (first DLAA test, 155 evaluations, every decision matched the rules)**
+- Decisions first used the fast `g_baseFps` EMA (~0.2 s).
+- Two 2x→3x steps were triggered by momentary dips (95 and 91.5 fps). 3x then rendered 100–106 fps (298–317 output), so Auto went back to 2x 2 s later.
+- **Fix:** decide on the average rendered fps over the whole 2 s window (frames ÷ elapsed).
+
+**Finding 2, starting cost guess (second DLAA test)**
+- The dip flips were gone, and a later step to 3x held for 110 s.
+- One 2x→3x→2x flip remained at session start. Under DLAA, 3x cost about 0% rendered fps (99.2 → 99.3), so the 0.9 prior predicted 268 for 3x when it was really 298.
+- **Fix:** `[FrameGen] AutoKeep`, default 0.95, clamped 0.85–1.0. It is refined from Auto's own uncapped steps (50/50 blend) and saved back to the ini when the 3-decimal value changes. With 0.95, the 99.2 fps case predicts 283 and stays at 2x.
+
+**Finding 3, output cap (cap-mode probing)**
+- **Problem:** with `OutputCap` on, output can never exceed the cap (≈ the target), so "more than 5% above" never fires. Auto stayed at whatever N it had reached, which was 3x in-game.
+- **Why rendered fps can't decide it:** capped rendered fps is just cap/N and shows no headroom.
+- **Cap-mode rule:** aim for the fewest generated frames that still reach the cap.
+  - Output ≥ 97% of the cap → probe N−1.
+  - Output < 93% → step up to the smallest M predicted to reach the cap.
+  - A probed-down N that falls below 93% before ever reaching the cap is a failed probe. The wait before the next probe doubles (20 → 40 → 80 → 160 s) and resets to 20 s after a probe that reaches the cap.
+  - Keep learning is skipped while capped.
+- **In-game, first cap-mode build (12 changes, all per rules):** Auto stepped down from 5x for the first time. It settled at 4x–5x (54–68 rendered fps) where uncapped Auto chose 2x–3x (~90–100), as the cap's semantics imply.
+  - Twice a probe sat in the 93–97% band and then drifted lower without counting as failed, so the wait didn't grow.
+  - **Fix:** a probe stays pending until it confirms the cap.
+- **In-game, final build (18 changes, all per rules):**
+  - Failed probes waited 20.1 s, then 40 s, then 80 s.
+  - A 5x→4x→3x→2x cascade reset the wait to 20 s (4x and 3x reached the cap), and only 2x failed.
+  - A probe that held the band (254) and then dropped (248) now counted as failed, and the wait doubled to 160 s.
+  - The 160 s clamp itself was not exercised before the session ended.
+
+**Defaults unchanged:** `Multiplier=2` and `OutputCap=off`. Auto is opt-in, from the menu or the ini.
+
 ## Key risks
 - **Manual hooking:** SL Vulkan manual hooking is documented as "advanced integration only". Running an injected `sl.interposer` next to the game's own NGX instance is untested, so Phase 3 is the go/no-go gate.
 - **Camera matrices:** the approximation may not be good enough, and step B is a reverse-engineering effort of unknown size.
