@@ -337,6 +337,16 @@ Streamline's Dynamic MFG is D3D12-only (`bIsDynamicMFGSupported` reads 0 here), 
 
 **Defaults unchanged:** `Multiplier=2` and `OutputCap=off`. Auto is opt-in, from the menu or the ini.
 
+**Corner readout (v0.8.1; commits 9d42b2f and 3f0b31b)**
+- **What it is:** `[Overlay] Readout=1`, or the "Corner readout" menu checkbox; off by default. A small ImGui line shows the mode (`FG Auto 3x`, `FG 2x`, `paused`, `FG off`), rendered fps and output fps (rendered × N while FG runs).
+- **How it's drawn:** `overlay::BeforePresent` now also draws when only the readout is on. It's drawn onto the swapchain image after the HUD pass, so it isn't in the HUD-less copy and DLSS-G treats it like the game's HUD. User test: clean at 3x and 4x, no smearing.
+- **Dragging:** while the menu is open, the readout accepts mouse input and can be dragged.
+  - The spot is saved on release as `[Overlay] ReadoutX` / `ReadoutY` (pixels; -1 means the top-right corner).
+  - Right-click resets it to the corner.
+  - A saved spot is clamped back on screen if the resolution shrinks.
+  - With the menu closed it is `NoInputs`.
+  - User test: dragging works in-game.
+
 ## Key risks
 - **Manual hooking:** SL Vulkan manual hooking is documented as "advanced integration only". Running an injected `sl.interposer` next to the game's own NGX instance is untested, so Phase 3 is the go/no-go gate.
 - **Camera matrices:** the approximation may not be good enough, and step B is a reverse-engineering effort of unknown size.
