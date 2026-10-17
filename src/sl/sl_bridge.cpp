@@ -23,6 +23,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "core/module_ranges.h"
+#include "overlay/overlay.h"
 #include "render/mv_convert.h"
 
 namespace efg::sl_bridge {
@@ -67,7 +68,12 @@ bool g_simEnded = false;
 bool g_frameHasSr = false;   // this frame had a DLSS-SR evaluate (3D world frame) and is tagged
 int g_srStreak = 0;          // consecutive presented frames with SR inputs
 bool g_fgOn = false;         // DLSS-G mode currently set to eOn
+uint32_t g_fgFrames = 0;     // numFramesToGenerate currently applied
 uint32_t g_framesToGenerateMax = 0;
+uint32_t g_framesPresented = 0;  // last DLSS-G numFramesActuallyPresented
+uint32_t g_dlssgStatus = 0;
+double g_baseFps = 0.0;          // EMA of rendered frames per second
+LARGE_INTEGER g_lastPresentQpc{};
 SrInputs g_lastSr{};
 constexpr int kStreakToEnable = 3;  // world frames required before turning FG on (avoids menu flicker)
 
@@ -293,13 +299,17 @@ void TagNull() {
     p_slSetTagForFrame(*g_frame, sl::ViewportHandle(0), tags, 2, nullptr);
 }
 
+// Applies DLSS-G on/off and the configured multiplier; only calls into SL when either changes, so the
+// overlay can switch 2x..6x live.
 void SetFrameGeneration(bool on) {
-    if (!p_slDLSSGSetOptions || on == g_fgOn) return;
+    if (!p_slDLSSGSetOptions) return;
     const Config& cfg = LoadConfig();
+    uint32_t wanted = static_cast<uint32_t>(cfg.multiplier - 1);
+    uint32_t frames = std::max<uint32_t>(1, std::min(wanted, g_framesToGenerateMax ? g_framesToGenerateMax : 1));
+    if (on == g_fgOn && (!on || frames == g_fgFrames)) return;
     sl::DLSSGOptions o{};
     o.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-    uint32_t wanted = static_cast<uint32_t>(cfg.multiplier - 1);
-    o.numFramesToGenerate = std::max<uint32_t>(1, std::min(wanted, g_framesToGenerateMax ? g_framesToGenerateMax : 1));
+    o.numFramesToGenerate = frames;
     o.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     o.mvecDepthWidth = g_lastSr.renderW;
     o.mvecDepthHeight = g_lastSr.renderH;
@@ -310,7 +320,10 @@ void SetFrameGeneration(bool on) {
     }
     EFG_LOG("frame generation %s (%ux, numFramesToGenerate %u) -> %s", on ? "ON" : "OFF", o.numFramesToGenerate + 1,
             o.numFramesToGenerate, ResultName(r));
-    if (r == sl::Result::eOk) g_fgOn = on;
+    if (r == sl::Result::eOk) {
+        g_fgOn = on;
+        g_fgFrames = frames;
+    }
 }
 
 // Keeps a hard link to the game's own nvngx_dlss.dll next to the SL plugins (same volume), refreshed
@@ -576,8 +589,10 @@ void BeforePresent() {
 
     // Frame generation only while the 3D world renders (frames with DLSS-SR inputs); menus,
     // loading screens etc. have no evaluate, so FG is switched off and the tags are cleared.
+    // Also paused while our overlay menu is open, so the menu is never interpolated.
     const int streak = g_frameHasSr ? g_srStreak + 1 : 0;
-    const bool wantFg = LoadConfig().multiplier >= 2 && g_frameHasSr && streak >= kStreakToEnable;
+    const bool wantFg = LoadConfig().multiplier >= 2 && g_frameHasSr && streak >= kStreakToEnable &&
+                        !overlay::Visible();
     if (!g_frameHasSr) TagNull();
     SetFrameGeneration(wantFg);
 
@@ -589,11 +604,41 @@ void AfterPresent(unsigned long long presentCount) {
     Marker(sl::PCLMarker::ePresentEnd);
     g_srStreak = g_frameHasSr ? g_srStreak + 1 : 0;
     g_frameHasSr = false;
+
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    if (g_lastPresentQpc.QuadPart) {
+        double dt = double(now.QuadPart - g_lastPresentQpc.QuadPart) / double(freq.QuadPart);
+        if (dt > 0) g_baseFps = g_baseFps > 0 ? g_baseFps * 0.95 + (1.0 / dt) * 0.05 : 1.0 / dt;
+    }
+    g_lastPresentQpc = now;
+    if (overlay::Visible() && presentCount % 30 == 0 && p_slDLSSGGetState) {
+        sl::DLSSGState st{};
+        SlCallScope scope;
+        if (p_slDLSSGGetState(sl::ViewportHandle(0), st, nullptr) == sl::Result::eOk) {
+            g_framesPresented = st.numFramesActuallyPresented;
+            g_dlssgStatus = static_cast<uint32_t>(st.status);
+        }
+    }
+
     if (presentCount == 2 || presentCount % 600 == 0) {
         LogDlssgState(presentCount == 2 ? "first frames" : (g_fgOn ? "periodic, FG on" : "periodic, FG off"));
         if (presentCount == 2 || presentCount % 6000 == 0) LogReflexState("periodic");
     }
     BeginFrame();  // next frame's simulation starts now (Reflex sleep happens here)
+}
+
+FgStatus GetFgStatus() {
+    FgStatus s;
+    s.slActive = g_initialized.load() && g_device.load() != VK_NULL_HANDLE;
+    s.fgOn = g_fgOn;
+    s.worldFrames = g_srStreak >= kStreakToEnable;
+    s.maxMultiplier = g_framesToGenerateMax ? g_framesToGenerateMax + 1 : 0;
+    s.framesPresented = g_framesPresented;
+    s.status = g_dlssgStatus;
+    s.baseFps = g_baseFps;
+    return s;
 }
 
 }  // namespace efg::sl_bridge

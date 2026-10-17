@@ -200,6 +200,26 @@ Runtime files: `winmm.dll` and `EnshroudedFG.ini` go next to the exe. The SL DLL
   - Changing N while on: apply directly, and verify that no recreate is needed.
 - **Dynamic MFG:** not offered, because SL marks it D3D12-only.
 
+**Phase 5 status (2026-10-17): ✅ done (v0.5.0).**
+
+**What shipped**
+- **Menu:** the Insert key (`[Overlay] ToggleKey` in the ini) opens an ImGui menu (`src/overlay/overlay.*`) with Off/2x–6x. Options above the GPU maximum are disabled. Changes apply live and are saved to the ini.
+- **Rendering:** ImGui draws into the presented image on our own command buffer, which waits on the game's present semaphores; present then waits on ours. It uses dynamic rendering and push-free descriptors, via ImGui's internal pool.
+- **Input:** the window is subclassed and input is swallowed while the menu is open. `SetCursorPos`/`ClipCursor` are suspended and ImGui draws a software cursor.
+- **FG while open:** frame generation pauses while the menu is open, so the menu is never interpolated.
+
+**Verified in-game**
+- DLSS-G reported `numFramesActuallyPresented` of **2, 3, 4, 5 and 6** for 2x–6x.
+- Menu input works and the game ignores input while the menu is open.
+
+**User feedback**
+- 4x–6x show visible artifacts and feel too laggy.
+- The display is above 240 Hz, and base fps is ~115, so 6x asks for about 690 fps.
+
+**Follow-ups this feeds into**
+- Phase 6: HUD-less and UI buffers, plus the real camera matrices, to reduce artifacts.
+- Phase 7: an output cap, so base fps × multiplier stays at or below the refresh rate (Reflex `frameLimitUs`), plus a VSync/present-mode option. Also clean up the stray `; Multiplier=` line that v0.4 wrote into the ini.
+
 ### Phase 6: Image quality
 - **Find where the HUD starts:** take a RenderDoc capture to locate the render pass where the HUD begins, after tonemapping and post-processing.
 - **HUD-less color:** hook `vkCmdBeginRendering` / `vkCmdBeginRenderPass2` for that pass and copy the target into a HUD-less image. Tag it as `kBufferTypeHUDLessColor`, together with a UI buffer, and set `enableUserInterfaceRecomposition`. This removes HUD and compass smearing.

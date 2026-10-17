@@ -22,6 +22,7 @@
 #include "core/module_ranges.h"
 #include "hooks/hook_util.h"
 #include "hooks/hooks.h"
+#include "overlay/overlay.h"
 
 namespace efg {
 namespace {
@@ -127,6 +128,7 @@ VKAPI_ATTR VkResult VKAPI_CALL HookCreateWin32Surface(VkInstance instance, const
             SlCallScope scope;
             VkResult r = proxy(instance, ci, alloc, out);
             EFG_LOG("vkCreateWin32SurfaceKHR via SL -> %d, surface %p", r, r == VK_SUCCESS ? (void*)*out : nullptr);
+            if (r == VK_SUCCESS) overlay::OnWindow(ci->hwnd);
             return r;
         }
     }
@@ -180,13 +182,17 @@ VKAPI_ATTR VkResult VKAPI_CALL HookCreateDevice(VkPhysicalDevice pd, const VkDev
     }
     EFG_LOG("vkCreateDevice via %s -> %d, device %p", proxy ? "SL proxy" : "native", r,
             r == VK_SUCCESS ? (void*)*out : nullptr);
-    if (r == VK_SUCCESS && proxy) sl::OnDeviceCreated(pd, *out);
+    if (r == VK_SUCCESS && proxy) {
+        sl::OnDeviceCreated(pd, *out);
+        overlay::OnDevice(g_mainInstance, pd, *out);
+    }
     return r;
 }
 
 VKAPI_ATTR void VKAPI_CALL HookDestroyDevice(VkDevice device, const VkAllocationCallbacks* alloc) {
     if (FromGame(_ReturnAddress())) {
         EFG_LOG("vkDestroyDevice %p", (void*)device);
+        overlay::OnDeviceDestroying(device);
         sl::OnDeviceDestroying(device);
     }
     r_DestroyDevice(device, alloc);
@@ -210,12 +216,14 @@ VKAPI_ATTR VkResult VKAPI_CALL HookCreateSwapchain(VkDevice device, const VkSwap
             viaSl ? " via SL" : (fromGame ? "" : " (internal)"), ci->imageExtent.width, ci->imageExtent.height,
             ci->imageFormat, ci->imageColorSpace, ci->minImageCount, ci->imageUsage, PresentModeName(ci->presentMode),
             (void*)ci->oldSwapchain, ChainTypes(ci->pNext).c_str(), r, r == VK_SUCCESS ? (void*)*out : nullptr);
+    if (viaSl && r == VK_SUCCESS) overlay::OnSwapchainCreated(*out, *ci);
     return r;
 }
 
 VKAPI_ATTR void VKAPI_CALL HookDestroySwapchain(VkDevice device, VkSwapchainKHR sc, const VkAllocationCallbacks* alloc) {
     if (FromGame(_ReturnAddress()) && sl::DeviceActive(device)) {
         EFG_LOG("vkDestroySwapchainKHR %p via SL", (void*)sc);
+        overlay::OnSwapchainDestroyed(sc);
         SlCallScope scope;
         sl::Proxies().destroySwapchain(device, sc, alloc);
         return;
@@ -225,8 +233,13 @@ VKAPI_ATTR void VKAPI_CALL HookDestroySwapchain(VkDevice device, VkSwapchainKHR 
 
 VKAPI_ATTR VkResult VKAPI_CALL HookGetSwapchainImages(VkDevice device, VkSwapchainKHR sc, uint32_t* count, VkImage* images) {
     if (FromGame(_ReturnAddress()) && sl::DeviceActive(device)) {
-        SlCallScope scope;
-        return sl::Proxies().getSwapchainImages(device, sc, count, images);
+        VkResult r;
+        {
+            SlCallScope scope;
+            r = sl::Proxies().getSwapchainImages(device, sc, count, images);
+        }
+        if (r == VK_SUCCESS && images) overlay::OnSwapchainImages(sc, *count, images);
+        return r;
     }
     return r_GetSwapchainImages(device, sc, count, images);
 }
@@ -255,16 +268,18 @@ VKAPI_ATTR VkResult VKAPI_CALL HookQueuePresent(VkQueue queue, const VkPresentIn
                 sl::QueueActive() ? " via SL" : "");
     }
     NgxOnPresent(frame);
+    VkPresentInfoKHR overlayInfo;
+    const VkPresentInfoKHR* presentInfo = overlay::BeforePresent(queue, info, overlayInfo);
     VkResult r;
     if (sl::QueueActive()) {
         sl::BeforePresent();
         {
             SlCallScope scope;
-            r = sl::Proxies().queuePresent(queue, info);
+            r = sl::Proxies().queuePresent(queue, presentInfo);
         }
         sl::AfterPresent(frame);
     } else {
-        r = r_QueuePresent(queue, info);
+        r = r_QueuePresent(queue, presentInfo);
     }
     if (r != VK_SUCCESS) EFG_LOG("vkQueuePresentKHR frame %llu -> %d", frame, r);
     return r;

@@ -1,6 +1,8 @@
 #pragma once
 
+#ifndef VK_NO_PROTOTYPES
 #define VK_NO_PROTOTYPES
+#endif
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
 
@@ -52,6 +54,18 @@ struct SrInputs {
 };
 // Called for the game's DLSS-SR evaluate; tags depth/MVs and sets the frame constants.
 void OnSrEvaluate(const SrInputs& in);
+
+// Snapshot for the overlay.
+struct FgStatus {
+    bool slActive = false;        // Streamline loaded and device created
+    bool fgOn = false;            // DLSS-G currently generating frames
+    bool worldFrames = false;     // the game is rendering 3D frames with DLSS-SR inputs
+    uint32_t maxMultiplier = 0;   // numFramesToGenerateMax + 1 (6 on RTX 50)
+    uint32_t framesPresented = 0; // frames presented per rendered frame (DLSS-G state)
+    uint32_t status = 0;          // sl::DLSSGStatus bits
+    double baseFps = 0.0;         // rendered (non-generated) frames per second
+};
+FgStatus GetFgStatus();
 
 // Frame pacing / latency markers, driven from the game's acquire and present calls.
 void OnAcquire();

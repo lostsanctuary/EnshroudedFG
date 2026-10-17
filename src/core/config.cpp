@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cwchar>
 #include <string>
 
@@ -10,46 +11,70 @@
 namespace efg {
 namespace {
 
-float ReadFloat(const wchar_t* section, const wchar_t* key, float def, const std::wstring& path) {
+const std::wstring& IniPath() {
+    static const std::wstring path = GameDir() + L"EnshroudedFG.ini";
+    return path;
+}
+
+float ReadFloat(const wchar_t* section, const wchar_t* key, float def) {
     wchar_t buf[64]{};
-    GetPrivateProfileStringW(section, key, L"", buf, 64, path.c_str());
+    GetPrivateProfileStringW(section, key, L"", buf, 64, IniPath().c_str());
     if (!buf[0]) return def;
     wchar_t* end = nullptr;
     float v = wcstof(buf, &end);
     return end != buf ? v : def;
 }
 
-void WriteDefaults(const std::wstring& path, const Config& c) {
+void WriteInt(const wchar_t* section, const wchar_t* key, int v) {
+    wchar_t buf[32];
+    swprintf_s(buf, L"%d", v);
+    WritePrivateProfileStringW(section, key, buf, IniPath().c_str());
+}
+
+void WriteFloat(const wchar_t* section, const wchar_t* key, float v, const wchar_t* fmt) {
     wchar_t buf[64];
-    WritePrivateProfileStringW(L"FrameGen", L"; Multiplier", L"1 = off, 2..6 = DLSS frame generation 2x..6x", path.c_str());
-    swprintf_s(buf, L"%d", c.multiplier);
-    WritePrivateProfileStringW(L"FrameGen", L"Multiplier", buf, path.c_str());
-    swprintf_s(buf, L"%.1f", c.fovYDegrees);
-    WritePrivateProfileStringW(L"Camera", L"FovYDegrees", buf, path.c_str());
-    swprintf_s(buf, L"%.2f", c.nearPlane);
-    WritePrivateProfileStringW(L"Camera", L"Near", buf, path.c_str());
-    swprintf_s(buf, L"%.0f", c.farPlane);
-    WritePrivateProfileStringW(L"Camera", L"Far", buf, path.c_str());
+    swprintf_s(buf, fmt, v);
+    WritePrivateProfileStringW(section, key, buf, IniPath().c_str());
+}
+
+void WriteDefaults(const Config& c) {
+    WriteInt(L"FrameGen", L"Multiplier", c.multiplier);
+    WriteInt(L"Overlay", L"ToggleKey", c.overlayKey);
+    WriteFloat(L"Camera", L"FovYDegrees", c.fovYDegrees, L"%.1f");
+    WriteFloat(L"Camera", L"Near", c.nearPlane, L"%.2f");
+    WriteFloat(L"Camera", L"Far", c.farPlane, L"%.0f");
+}
+
+int Clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+Config& Mutable() {
+    static Config cfg = [] {
+        Config c;
+        const std::wstring& path = IniPath();
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) WriteDefaults(c);
+        c.multiplier = Clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGen", L"Multiplier", c.multiplier, path.c_str())), 1, 6);
+        c.overlayKey = static_cast<int>(GetPrivateProfileIntW(L"Overlay", L"ToggleKey", c.overlayKey, path.c_str()));
+        c.fovYDegrees = ReadFloat(L"Camera", L"FovYDegrees", c.fovYDegrees);
+        c.nearPlane = ReadFloat(L"Camera", L"Near", c.nearPlane);
+        c.farPlane = ReadFloat(L"Camera", L"Far", c.farPlane);
+        EFG_LOG("config: multiplier %dx, overlay key 0x%02x, fovY %.1f, near %.2f, far %.0f", c.multiplier, c.overlayKey,
+                c.fovYDegrees, c.nearPlane, c.farPlane);
+        return c;
+    }();
+    return cfg;
 }
 
 }  // namespace
 
-const Config& LoadConfig() {
-    static const Config cfg = [] {
-        Config c;
-        std::wstring path = GameDir() + L"EnshroudedFG.ini";
-        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) WriteDefaults(path, c);
-        c.multiplier = static_cast<int>(GetPrivateProfileIntW(L"FrameGen", L"Multiplier", c.multiplier, path.c_str()));
-        if (c.multiplier < 1) c.multiplier = 1;
-        if (c.multiplier > 6) c.multiplier = 6;
-        c.fovYDegrees = ReadFloat(L"Camera", L"FovYDegrees", c.fovYDegrees, path);
-        c.nearPlane = ReadFloat(L"Camera", L"Near", c.nearPlane, path);
-        c.farPlane = ReadFloat(L"Camera", L"Far", c.farPlane, path);
-        EFG_LOG("config: multiplier %dx, fovY %.1f, near %.2f, far %.0f", c.multiplier, c.fovYDegrees, c.nearPlane,
-                c.farPlane);
-        return c;
-    }();
-    return cfg;
+const Config& LoadConfig() { return Mutable(); }
+
+void SetMultiplier(int multiplier) {
+    Config& c = Mutable();
+    multiplier = Clamp(multiplier, 1, 6);
+    if (c.multiplier == multiplier) return;
+    c.multiplier = multiplier;
+    WriteInt(L"FrameGen", L"Multiplier", multiplier);
+    EFG_LOG("config: multiplier set to %dx (saved)", multiplier);
 }
 
 }  // namespace efg

@@ -9,6 +9,7 @@
 #include "core/module_ranges.h"
 #include "hooks/hook_util.h"
 #include "hooks/hooks.h"
+#include "overlay/overlay.h"
 
 namespace efg {
 namespace {
@@ -105,6 +106,7 @@ void InstallLoaderHooks() {
     void* gpa = GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "GetProcAddressForCaller");
     InstallHook(gpa, &DetourGetProcAddressForCaller, &g_origGetProcAddressForCaller,
                 "KernelBase!GetProcAddressForCaller");
+    overlay::InstallInputHooks();
     CheckModules();  // in case either module was loaded before us
 }
 

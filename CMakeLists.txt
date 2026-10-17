@@ -30,6 +30,16 @@ function(efg_shader name array)
 endfunction()
 efg_shader(mv_convert kMvConvertSpv)
 
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui)
+add_library(imgui STATIC
+    ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/imgui_demo.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_win32.cpp ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp)
+target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+target_compile_definitions(imgui PUBLIC VK_NO_PROTOTYPES IMGUI_IMPL_VULKAN_NO_PROTOTYPES
+                                        IMGUI_IMPL_WIN32_DISABLE_GAMEPAD IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
+target_link_libraries(imgui PUBLIC Vulkan::Headers)
+
 add_library(EnshroudedFG SHARED
     src/dllmain.cpp
     src/core/config.cpp
@@ -37,6 +47,7 @@ add_library(EnshroudedFG SHARED
     src/core/module_ranges.cpp
     src/sl/sl_bridge.cpp
     src/render/mv_convert.cpp
+    src/overlay/overlay.cpp
     ${EFG_SHADER_HEADERS}
     src/hooks/loader_hooks.cpp
     src/hooks/vulkan_hooks.cpp
@@ -49,4 +60,4 @@ set_target_properties(EnshroudedFG PROPERTIES OUTPUT_NAME winmm)
 target_include_directories(EnshroudedFG PRIVATE src ${EFG_GEN_DIR} external/ngx/include external/streamline/include)
 target_compile_definitions(EnshroudedFG PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_options(EnshroudedFG PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8>)
-target_link_libraries(EnshroudedFG PRIVATE minhook Vulkan::Headers wintrust crypt32)
+target_link_libraries(EnshroudedFG PRIVATE minhook imgui Vulkan::Headers wintrust crypt32)
