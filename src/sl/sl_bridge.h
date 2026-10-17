@@ -67,6 +67,8 @@ struct FgStatus {
     bool fgOn = false;            // DLSS-G currently generating frames
     bool worldFrames = false;     // the game is rendering 3D frames with DLSS-SR inputs
     uint32_t maxMultiplier = 0;   // numFramesToGenerateMax + 1 (6 on RTX 50)
+    uint32_t multiplier = 1;      // multiplier in use (Auto's current choice under Auto; 1 = off)
+    uint32_t autoMultiplier = 2;  // Auto's current choice
     uint32_t framesPresented = 0; // frames presented per rendered frame (DLSS-G state)
     uint32_t status = 0;          // sl::DLSSGStatus bits
     double baseFps = 0.0;         // rendered (non-generated) frames per second

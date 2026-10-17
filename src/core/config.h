@@ -2,10 +2,13 @@
 
 namespace efg {
 
+constexpr int kMultiplierAuto = 0;
+
 // Settings from <game>\EnshroudedFG.ini. Missing keys are written with their defaults on start-up, so
 // the ini always documents every option.
 struct Config {
-    // [FrameGen] Multiplier: 1 = off, 2..6 = DLSS multi frame generation 2x..6x.
+    // [FrameGen] Multiplier: 1 = off, 2..6 = DLSS multi frame generation 2x..6x,
+    // kMultiplierAuto ("auto") = pick 2x..max at run time so the output just fills the display.
     int multiplier = 2;
     // [FrameGen] OutputCap: limit on displayed fps while frame generation runs (Reflex frame limiter;
     // rendered fps becomes cap / multiplier). 0 = off, -1 = auto (3% below the monitor refresh rate).
@@ -27,8 +30,11 @@ struct Config {
 
 const Config& LoadConfig();
 
+// True when frame generation is wanted at all (a fixed 2x..6x or Auto).
+inline bool FrameGenEnabled(const Config& c) { return c.multiplier != 1; }
+
 // Runtime changes from the overlay; each is written to the ini immediately.
-void SetMultiplier(int multiplier);
+void SetMultiplier(int multiplier);  // 1..6 or kMultiplierAuto
 void SetUseGameCamera(bool use);
 void SetOutputCap(int cap);  // 0 = off, -1 = auto, otherwise fps
 

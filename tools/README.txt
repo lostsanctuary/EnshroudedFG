@@ -3,7 +3,7 @@ EnshroudedFG - DLSS Multi Frame Generation (2x-6x) for Enshrouded
 
 Adds NVIDIA DLSS Frame Generation / Multi Frame Generation to Enshrouded (Vulkan), using the
 game's own DLSS inputs, its HUD-less image and its real camera. Switch Off / 2x / 3x / 4x / 5x / 6x
-in game with the Insert key.
+/ Auto in game with the Insert key.
 
 Requirements
 ------------
@@ -29,7 +29,13 @@ Verify the game files in Steam if you want to be sure everything is back to stoc
 
 In-game menu (Insert)
 ---------------------
-- Frame generation: Off / 2x / 3x / 4x / 5x / 6x. Multipliers your GPU cannot do are greyed out.
+- Frame generation: Off / 2x / 3x / 4x / 5x / 6x / Auto. Multipliers your GPU cannot do are greyed out.
+- Auto picks the multiplier for you (2x up to your GPU's maximum) so that rendered fps x multiplier
+  just fills your display (refresh rate - 3%). Every 2 seconds while you play it looks at the average
+  rendered fps over those 2 seconds (so a brief dip does not switch the multiplier): it steps
+  down when the output is more than 5% above that, and up only when the next multiplier is expected
+  to stay below it (it learns how much each extra generated frame costs in rendered fps). The button
+  shows the current choice, e.g. "Auto (3x)"; changes are written to EnshroudedFG\log.txt ("auto: ...").
 - Output cap (default Off): Auto keeps the displayed frame rate 3% below your monitor's refresh rate
   using the Reflex frame limiter. Rendering then runs at cap / multiplier, so at high multipliers it
   feels laggier. Usually better: choose the multiplier whose output just reaches your refresh rate
@@ -39,7 +45,7 @@ Frame generation pauses while the menu is open. All choices are saved to Enshrou
 
 EnshroudedFG.ini (next to enshrouded.exe)
 ------------------------------------------
-[FrameGen] Multiplier   1 (off) .. 6
+[FrameGen] Multiplier   1 (off) .. 6 | auto
 [FrameGen] OutputCap    off | auto | <fps>
 [Display]  PresentMode  game | immediate | mailbox | fifo   (applies after restarting the game)
 [Overlay]  ToggleKey    virtual-key code, default 0x2D (Insert)

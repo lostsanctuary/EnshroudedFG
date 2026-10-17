@@ -93,6 +93,18 @@ LARGE_INTEGER g_lastPresentQpc{};
 SrInputs g_lastSr{};
 constexpr int kStreakToEnable = 3;  // world frames required before turning FG on (avoids menu flicker)
 
+// Auto multiplier: a hand-rolled dynamic MFG (Streamline's Dynamic MFG is D3D12-only).
+uint32_t g_autoMultiplier = 2;     // multiplier Auto currently runs at (kept across menus/loading)
+double g_autoKeep = 0.9;           // share of rendered fps kept per extra generated frame (learned)
+double g_autoLastEval = 0;         // time of the last evaluation in s (0 = FG not running under Auto)
+uint32_t g_autoWindowFrames = 0;   // frames presented since then (rendered fps = frames / elapsed)
+uint32_t g_autoFromMultiplier = 0; // multiplier before the last change, to measure its cost (0 = none)
+double g_autoFromFps = 0;          // rendered fps before the last change
+uint32_t g_autoCeiling = 0;        // after a step down, the multipliers above stay blocked ...
+double g_autoCeilingUntil = 0;     // ... until this time
+constexpr double kAutoIntervalS = 2.0;
+constexpr double kAutoHoldS = 10.0;
+
 const char* ResultName(sl::Result r) {
     switch (r) {
         case sl::Result::eOk: return "eOk";
@@ -497,12 +509,84 @@ void ApplyFrameLimit() {
     if (r == sl::Result::eOk) g_frameLimitUs = limitUs;
 }
 
-// Applies DLSS-G on/off and the configured multiplier; only calls into SL when either changes, so the
-// overlay can switch 2x..6x live.
+uint32_t MaxMultiplier() { return g_framesToGenerateMax ? g_framesToGenerateMax + 1 : 2; }
+
+// The multiplier to run: the configured one, or Auto's current choice.
+uint32_t WantedMultiplier() {
+    const int m = LoadConfig().multiplier;
+    return m == kMultiplierAuto ? g_autoMultiplier : static_cast<uint32_t>(m);
+}
+
+// Auto: every 2 s while frame generation runs, pick the multiplier N in [2, max] whose output
+// (rendered fps averaged over those 2 s, x N; a brief dip must not trigger a step) just fills the display (target = refresh x 0.97). The output at another
+// multiplier M is predicted as rendered x M x keep^(M-N), where keep is the share of rendered fps that
+// survives one more generated frame (0.9 to start, then measured from Auto's own steps). Down when the
+// output is more than 5% above the target; up only while the higher multiplier is predicted to stay
+// below it. After a step down, the multipliers above stay blocked for 10 s so it cannot flip-flop.
+void UpdateAutoMultiplier(double now) {
+    if (LoadConfig().multiplier != kMultiplierAuto || !g_fgOn || !g_refreshHz || g_baseFps <= 1) {
+        g_autoLastEval = 0;
+        g_autoFromMultiplier = 0;
+        return;
+    }
+    const uint32_t maxM = MaxMultiplier();
+    g_autoMultiplier = std::clamp<uint32_t>(g_autoMultiplier, 2, maxM);
+    const uint32_t n = g_fgFrames + 1;  // as applied to DLSS-G
+    const bool first = g_autoLastEval == 0;
+    if (first || n != g_autoMultiplier) {
+        // Just started (or a change is still being applied): measure a full interval first.
+        if (first) EFG_LOG("auto: frame generation running at %ux, evaluating every %.0f s", n, kAutoIntervalS);
+        g_autoLastEval = now;
+        g_autoWindowFrames = 0;
+        return;
+    }
+    ++g_autoWindowFrames;
+    if (now - g_autoLastEval < kAutoIntervalS) return;
+    const double r = g_autoWindowFrames / (now - g_autoLastEval);
+    g_autoLastEval = now;
+    g_autoWindowFrames = 0;
+    const double target = g_refreshHz * 0.97;
+    if (g_autoFromMultiplier && g_autoFromMultiplier != n && g_autoFromFps > 1) {
+        const double observed = std::pow(r / g_autoFromFps, 1.0 / (double(n) - double(g_autoFromMultiplier)));
+        g_autoKeep = std::clamp(0.5 * g_autoKeep + 0.5 * observed, 0.85, 1.0);
+    }
+    g_autoFromMultiplier = 0;
+
+    auto predicted = [&](uint32_t m) { return r * m * std::pow(g_autoKeep, double(m) - double(n)); };
+    uint32_t next = n;
+    const char* why = "stays";
+    if (r * n > target * 1.05 && n > 2) {
+        next = 2;
+        for (uint32_t m = n - 1; m > 2; --m) {
+            if (predicted(m) <= target) {
+                next = m;
+                break;
+            }
+        }
+        g_autoCeiling = n - 1;
+        g_autoCeilingUntil = now + kAutoHoldS;
+        why = "output too high";
+    } else {
+        const uint32_t ceiling = now < g_autoCeilingUntil ? std::min(g_autoCeiling, maxM) : maxM;
+        while (next < ceiling && predicted(next + 1) < target) ++next;
+        if (next != n) why = "room for more";
+    }
+    if (next != n || LoadConfig().verboseLog) {
+        EFG_LOG("auto: rendered %.1f fps x%u = %.0f fps output, target %.0f (%u Hz), keep %.2f/step -> %ux (%s)", r,
+                n, r * n, target, g_refreshHz, g_autoKeep, next, why);
+    }
+    if (next != n) {
+        g_autoFromMultiplier = n;
+        g_autoFromFps = r;
+        g_autoMultiplier = next;
+    }
+}
+
+// Applies DLSS-G on/off and the wanted multiplier; only calls into SL when either changes, so the
+// overlay (and Auto) can switch 2x..6x live.
 void SetFrameGeneration(bool on) {
     if (!p_slDLSSGSetOptions) return;
-    const Config& cfg = LoadConfig();
-    uint32_t wanted = static_cast<uint32_t>(cfg.multiplier - 1);
+    uint32_t wanted = WantedMultiplier() - 1;
     uint32_t frames = std::max<uint32_t>(1, std::min(wanted, g_framesToGenerateMax ? g_framesToGenerateMax : 1));
     if (on == g_fgOn && (!on || frames == g_fgFrames)) return;
     sl::DLSSGOptions o{};
@@ -793,7 +877,7 @@ void BeforePresent() {
     // loading screens etc. have no evaluate, so FG is switched off and the tags are cleared.
     // Also paused while our overlay menu is open, so the menu is never interpolated.
     const int streak = g_frameHasSr ? g_srStreak + 1 : 0;
-    const bool wantFg = LoadConfig().multiplier >= 2 && g_frameHasSr && streak >= kStreakToEnable &&
+    const bool wantFg = FrameGenEnabled(LoadConfig()) && g_frameHasSr && streak >= kStreakToEnable &&
                         !overlay::Visible();
     if (!g_frameHasSr) TagNull();
     SetFrameGeneration(wantFg);
@@ -819,6 +903,7 @@ void AfterPresent(unsigned long long presentCount) {
     }
     g_lastPresentQpc = now;
     if (presentCount == 2 || presentCount % 600 == 0) g_refreshHz = QueryRefreshRate();
+    UpdateAutoMultiplier(double(now.QuadPart) / double(freq.QuadPart));
     static LARGE_INTEGER lastCapLog{};
     if (g_frameLimitUs && LoadConfig().verboseLog &&
         double(now.QuadPart - lastCapLog.QuadPart) / double(freq.QuadPart) > 2.0) {
@@ -867,7 +952,7 @@ void OnImageViewCreated(VkImageView view, VkImage image) {
 // (see PLAN.md, Phase 6 frame trace). Right before that pass, copy the image as HUD-less colour.
 void OnBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* ri) {
     if (!g_frameHasSr || g_hudlessTagged || !ri || ri->colorAttachmentCount < 1 || !ri->pColorAttachments) return;
-    if (LoadConfig().multiplier < 2 || !g_frame || !p_slSetTagForFrame) return;
+    if (!FrameGenEnabled(LoadConfig()) || !g_frame || !p_slSetTagForFrame) return;
     const VkRenderingAttachmentInfo& a = ri->pColorAttachments[0];
     if (a.loadOp != VK_ATTACHMENT_LOAD_OP_LOAD || !a.imageView) return;
     VkImage image;
@@ -924,6 +1009,8 @@ FgStatus GetFgStatus() {
     s.fgOn = g_fgOn;
     s.worldFrames = g_srStreak >= kStreakToEnable;
     s.maxMultiplier = g_framesToGenerateMax ? g_framesToGenerateMax + 1 : 0;
+    s.multiplier = FrameGenEnabled(LoadConfig()) ? std::min(WantedMultiplier(), MaxMultiplier()) : 1;
+    s.autoMultiplier = std::min(g_autoMultiplier, MaxMultiplier());
     s.framesPresented = g_framesPresented;
     s.status = g_dlssgStatus;
     s.baseFps = g_baseFps;

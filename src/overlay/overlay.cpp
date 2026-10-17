@@ -277,6 +277,16 @@ void DrawMenu() {
         if (!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Not supported on this GPU (max %ux)", st.maxMultiplier);
     }
+    ImGui::SameLine();
+    char fgAutoLabel[48];
+    snprintf(fgAutoLabel, sizeof(fgAutoLabel), "Auto (%ux)###fgauto", st.autoMultiplier);
+    ImGui::BeginDisabled(!st.slActive);
+    if (ImGui::RadioButton(fgAutoLabel, cfg.multiplier == kMultiplierAuto)) SetMultiplier(kMultiplierAuto);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Picks 2x..%ux by itself so that rendered fps x multiplier just fills your display\n"
+                          "(%.0f fps). Re-checked every 2 s while you play; the menu shows its current choice.",
+                          st.maxMultiplier ? st.maxMultiplier : 6, st.refreshHz * 0.97);
     ImGui::TextUnformatted("Output cap");
     if (ImGui::RadioButton("Off##outputcap", cfg.outputCap == 0)) SetOutputCap(0);
     ImGui::SameLine();
@@ -306,21 +316,21 @@ void DrawMenu() {
 
     if (!st.slActive) {
         ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "Streamline is not active - see EnshroudedFG\\log.txt");
-    } else if (cfg.multiplier == 1) {
+    } else if (st.multiplier == 1) {
         ImGui::TextUnformatted("Status: off");
     } else if (!st.worldFrames) {
         ImGui::TextUnformatted("Status: waiting for the game world (off in menus and loading screens)");
     } else {
-        ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1), "Status: %ux - paused while this menu is open", cfg.multiplier);
+        ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1), "Status: %ux%s - paused while this menu is open", st.multiplier,
+                           cfg.multiplier == kMultiplierAuto ? " (Auto)" : "");
     }
     if (st.status) ImGui::TextColored(ImVec4(1, 0.6f, 0.2f, 1), "DLSS-G status flags: 0x%x", st.status);
-    ImGui::Text("Rendered: %.0f fps   Expected output: ~%.0f fps", st.baseFps,
-                st.baseFps * (cfg.multiplier > 1 ? cfg.multiplier : 1));
+    ImGui::Text("Rendered: %.0f fps   Expected output: ~%.0f fps", st.baseFps, st.baseFps * st.multiplier);
     if (st.outputCapFps > 0)
-        ImGui::Text("Output capped at %.0f fps -> rendering limited to %.0f fps at %dx", st.outputCapFps,
-                    st.outputCapFps / (cfg.multiplier > 1 ? cfg.multiplier : 1), cfg.multiplier);
+        ImGui::Text("Output capped at %.0f fps -> rendering limited to %.0f fps at %ux", st.outputCapFps,
+                    st.outputCapFps / st.multiplier, st.multiplier);
     if (st.maxMultiplier) ImGui::TextDisabled("This GPU supports up to %ux.", st.maxMultiplier);
-    if (st.refreshHz && st.baseFps > 1 && cfg.outputCap == 0) {
+    if (st.refreshHz && st.baseFps > 1 && cfg.outputCap == 0 && cfg.multiplier != kMultiplierAuto) {
         const int fit = static_cast<int>(st.refreshHz / st.baseFps);
         ImGui::TextDisabled("Tip: at %.0f rendered fps, %dx already reaches your %u Hz display.", st.baseFps,
                             fit < 2 ? 2 : (fit > 6 ? 6 : fit), st.refreshHz);

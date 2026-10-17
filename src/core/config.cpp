@@ -59,6 +59,13 @@ int ParseCap(const std::wstring& s) {
     return v <= 0 ? 0 : Clamp(v, 30, 2000);
 }
 
+std::wstring MultiplierToString(int m) { return m == kMultiplierAuto ? L"auto" : std::to_wstring(m); }
+
+int ParseMultiplier(const std::wstring& s) {
+    if (_wcsicmp(s.c_str(), L"auto") == 0) return kMultiplierAuto;
+    return Clamp(ToInt(s, 2), 1, 6);
+}
+
 int ParsePresentMode(const std::wstring& s) {
     if (_wcsicmp(s.c_str(), L"immediate") == 0) return 1;
     if (_wcsicmp(s.c_str(), L"mailbox") == 0) return 2;
@@ -97,7 +104,7 @@ Config& Mutable() {
         Config c;
         RemoveStrayLines();
 
-        c.multiplier = Clamp(ToInt(ReadOrDefault(L"FrameGen", L"Multiplier", L"2"), 2), 1, 6);
+        c.multiplier = ParseMultiplier(ReadOrDefault(L"FrameGen", L"Multiplier", L"2"));
         c.outputCap = ParseCap(ReadOrDefault(L"FrameGen", L"OutputCap", L"off"));
         c.presentModeOverride = ParsePresentMode(ReadOrDefault(L"Display", L"PresentMode", L"game"));
         c.overlayKey = ToInt(ReadOrDefault(L"Overlay", L"ToggleKey", L"0x2D"), 0x2D);
@@ -109,8 +116,9 @@ Config& Mutable() {
         ReadOrDefault(L"Debug", L"FrameTrace", L"0");
 
         static const char* kModes[] = {"game", "immediate", "mailbox", "fifo"};
-        EFG_LOG("config: multiplier %dx, output cap %ls, present mode %s, overlay key 0x%02x, camera %s, verbose %d",
-                c.multiplier, CapToString(c.outputCap).c_str(), kModes[c.presentModeOverride], c.overlayKey,
+        EFG_LOG("config: multiplier %ls, output cap %ls, present mode %s, overlay key 0x%02x, camera %s, verbose %d",
+                c.multiplier == kMultiplierAuto ? L"auto" : (std::to_wstring(c.multiplier) + L"x").c_str(),
+                CapToString(c.outputCap).c_str(), kModes[c.presentModeOverride], c.overlayKey,
                 c.useGameCamera ? "game" : "approx", c.verboseLog);
         return c;
     }();
@@ -123,11 +131,11 @@ const Config& LoadConfig() { return Mutable(); }
 
 void SetMultiplier(int multiplier) {
     Config& c = Mutable();
-    multiplier = Clamp(multiplier, 1, 6);
+    if (multiplier != kMultiplierAuto) multiplier = Clamp(multiplier, 1, 6);
     if (c.multiplier == multiplier) return;
     c.multiplier = multiplier;
-    Write(L"FrameGen", L"Multiplier", std::to_wstring(multiplier));
-    EFG_LOG("config: multiplier set to %dx (saved)", multiplier);
+    Write(L"FrameGen", L"Multiplier", MultiplierToString(multiplier));
+    EFG_LOG("config: multiplier set to %ls (saved)", MultiplierToString(multiplier).c_str());
 }
 
 void SetUseGameCamera(bool use) {
