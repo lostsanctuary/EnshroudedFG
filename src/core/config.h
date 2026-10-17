@@ -23,6 +23,10 @@ struct Config {
     int overlayKey = 0x2D;
     // [Overlay] Readout: small always-on corner readout (multiplier, rendered and output fps).
     bool readout = false;
+    // [Overlay] ReadoutX / ReadoutY: top-left of the readout in pixels, dragged there in the menu;
+    // -1 = default (top-right corner).
+    int readoutX = -1;
+    int readoutY = -1;
     // [Camera] Source: game = the game's camera read from memory; approx = approximate camera.
     bool useGameCamera = true;
     // [Camera] fallback projection for the approximate camera.
@@ -43,6 +47,7 @@ void SetMultiplier(int multiplier);  // 1..6 or kMultiplierAuto
 void SetUseGameCamera(bool use);
 void SetOutputCap(int cap);  // 0 = off, -1 = auto, otherwise fps
 void SetAutoKeep(float keep);
-void SetReadout(bool on);  // saved only when the rounded value changes
+void SetReadout(bool on);
+void SetReadoutPos(int x, int y);  // -1, -1 = back to the default corner  // saved only when the rounded value changes
 
 }  // namespace efg

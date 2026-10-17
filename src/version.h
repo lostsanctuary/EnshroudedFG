@@ -1,3 +1,3 @@
 #pragma once
 
-#define EFG_VERSION_STRING "0.8.0"
+#define EFG_VERSION_STRING "0.8.1"

@@ -118,6 +118,9 @@ Config& Mutable() {
         c.presentModeOverride = ParsePresentMode(ReadOrDefault(L"Display", L"PresentMode", L"game"));
         c.overlayKey = ToInt(ReadOrDefault(L"Overlay", L"ToggleKey", L"0x2D"), 0x2D);
         c.readout = ToInt(ReadOrDefault(L"Overlay", L"Readout", L"0"), 0) != 0;
+        c.readoutX = ToInt(ReadOrDefault(L"Overlay", L"ReadoutX", L"-1"), -1);
+        c.readoutY = ToInt(ReadOrDefault(L"Overlay", L"ReadoutY", L"-1"), -1);
+        if (c.readoutX < 0 || c.readoutY < 0) c.readoutX = c.readoutY = -1;
         c.useGameCamera = _wcsicmp(ReadOrDefault(L"Camera", L"Source", L"game").c_str(), L"approx") != 0;
         c.fovYDegrees = ToFloat(ReadOrDefault(L"Camera", L"FovYDegrees", L"60"), 60.0f);
         c.nearPlane = ToFloat(ReadOrDefault(L"Camera", L"Near", L"0.1"), 0.1f);
@@ -164,6 +167,20 @@ void SetReadout(bool on) {
     c.readout = on;
     Write(L"Overlay", L"Readout", on ? L"1" : L"0");
     EFG_LOG("config: corner readout %s (saved)", on ? "on" : "off");
+}
+
+void SetReadoutPos(int x, int y) {
+    Config& c = Mutable();
+    if (x < 0 || y < 0) x = y = -1;
+    if (c.readoutX == x && c.readoutY == y) return;
+    c.readoutX = x;
+    c.readoutY = y;
+    Write(L"Overlay", L"ReadoutX", std::to_wstring(x));
+    Write(L"Overlay", L"ReadoutY", std::to_wstring(y));
+    if (x < 0)
+        EFG_LOG("config: corner readout position reset to the top-right corner (saved)");
+    else
+        EFG_LOG("config: corner readout moved to %d, %d (saved)", x, y);
 }
 
 void SetUseGameCamera(bool use) {

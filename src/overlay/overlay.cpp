@@ -4,6 +4,7 @@
 #include <imgui_impl_vulkan.h>
 #include <imgui_impl_win32.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <vector>
@@ -315,8 +316,9 @@ void DrawMenu() {
     bool readout = cfg.readout;
     if (ImGui::Checkbox("Corner readout", &readout)) SetReadout(readout);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Small always-on readout in the top-right corner while this menu is closed:\n"
-                          "multiplier (Auto's current choice), rendered fps and output fps.");
+        ImGui::SetTooltip("Small always-on readout: multiplier (Auto's current choice), rendered fps and\n"
+                          "output fps. While this menu is open, drag it where you want it; right-click it\n"
+                          "to put it back in the top-right corner.");
     ImGui::Spacing();
 
     if (!st.slActive) {
@@ -349,11 +351,16 @@ void DrawMenu() {
     ImGui::End();
 }
 
-// Always-on corner readout (menu closed). Drawn onto the final image like the game's HUD, so the
-// HUD-less colour keeps DLSS-G from interpolating it.
-void DrawReadout() {
+// Always-on corner readout. Drawn onto the final image like the game's HUD, so the HUD-less colour
+// keeps DLSS-G from interpolating it. While the menu is open it takes the mouse: drag it anywhere
+// (saved on release), right-click puts it back in the top-right corner.
+void DrawReadout(bool movable) {
+    static ImVec2 lastSize(0, 0);
+    static bool dragged = false;  // the user is dragging it (menu open)
+    static bool snap = false;     // re-place it next frame even while movable (after a reset)
+    const Config& cfg = LoadConfig();
     const sl_bridge::FgStatus st = sl_bridge::GetFgStatus();
-    const bool autoMode = LoadConfig().multiplier == kMultiplierAuto;
+    const bool autoMode = cfg.multiplier == kMultiplierAuto;
     char mode[32];
     if (!st.slActive)
         snprintf(mode, sizeof(mode), "FG unavailable");
@@ -363,14 +370,43 @@ void DrawReadout() {
         snprintf(mode, sizeof(mode), "FG %s%ux%s", autoMode ? "Auto " : "", st.multiplier, st.fgOn ? "" : " paused");
     const double output = st.baseFps * (st.fgOn ? st.multiplier : 1);
 
+    // Fixed: the saved spot (kept on screen if the resolution shrank) or the top-right corner.
+    // Movable: placed once when it appears, then ImGui owns the position while the user drags it.
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 12, vp->WorkPos.y + 12), ImGuiCond_Always,
-                            ImVec2(1, 0));
+    const ImGuiCond cond = movable && !snap ? ImGuiCond_Appearing : ImGuiCond_Always;
+    snap = false;
+    if (cfg.readoutX >= 0) {
+        const float x = std::min(float(cfg.readoutX), vp->WorkPos.x + vp->WorkSize.x - lastSize.x);
+        const float y = std::min(float(cfg.readoutY), vp->WorkPos.y + vp->WorkSize.y - lastSize.y);
+        ImGui::SetNextWindowPos(ImVec2(std::max(x, vp->WorkPos.x), std::max(y, vp->WorkPos.y)), cond);
+    } else {
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 12, vp->WorkPos.y + 12), cond, ImVec2(1, 0));
+    }
     ImGui::SetNextWindowBgAlpha(0.45f);
-    ImGui::Begin("##efgreadout", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
-                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav;
+    if (!movable) flags |= ImGuiWindowFlags_NoInputs;
+    ImGui::Begin("##efgreadout", nullptr, flags);
     ImGui::Text("%s  |  %.0f rendered  |  %.0f output fps", mode, st.baseFps, output);
+    lastSize = ImGui::GetWindowSize();
+    if (movable) {
+        if (ImGui::IsWindowHovered() && !dragged) {
+            ImGui::SetTooltip("Drag to move. Right-click: back to the top-right corner.");
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                SetReadoutPos(-1, -1);
+                snap = true;
+            }
+        }
+        if (ImGui::IsWindowFocused() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) dragged = true;
+        if (dragged && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            dragged = false;
+            const ImVec2 pos = ImGui::GetWindowPos();
+            SetReadoutPos(static_cast<int>(pos.x + 0.5f), static_cast<int>(pos.y + 0.5f));
+        }
+    } else {
+        dragged = false;
+    }
     ImGui::End();
 }
 
@@ -518,10 +554,12 @@ const VkPresentInfoKHR* BeforePresent(VkQueue queue, const VkPresentInfoKHR* inf
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
-    if (menu)
+    if (menu) {
         DrawMenu();
-    else
-        DrawReadout();
+        if (LoadConfig().readout) DrawReadout(true);  // on top of the menu, draggable
+    } else {
+        DrawReadout(false);
+    }
     ImGui::Render();
     RecordAndSubmit(queue, pi, info);
 
