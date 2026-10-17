@@ -1,8 +1,7 @@
-#include "render/mv_convert.h"
+#include "render/copy_pass.h"
 
 #include "core/log.h"
 #include "hooks/hooks.h"
-#include "render/mv_convert_spv.h"
 
 namespace efg::render {
 namespace {
@@ -10,14 +9,17 @@ namespace {
 template <class T>
 bool Load(T& out, VkDevice device, const char* name) {
     out = reinterpret_cast<T>(RealDeviceProc(device, name));
-    if (!out) EFG_LOG("MvConverter: missing device function %s", name);
+    if (!out) EFG_LOG("CopyPass: missing device function %s", name);
     return out != nullptr;
 }
 
 }  // namespace
 
-bool MvConverter::Init(VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device) {
+bool CopyPass::Init(const char* name, VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device,
+                    VkFormat dstFormat, const uint32_t* spirv, size_t spirvBytes) {
+    name_ = name;
     device_ = device;
+    format_ = dstFormat;
     auto getMemProps = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
         RealInstanceProc(instance, "vkGetPhysicalDeviceMemoryProperties"));
     PFN_vkCreateShaderModule createShaderModule = nullptr;
@@ -70,8 +72,8 @@ bool MvConverter::Init(VkInstance instance, VkPhysicalDevice physicalDevice, VkD
     if (createPipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout_) != VK_SUCCESS) return false;
 
     VkShaderModuleCreateInfo smInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    smInfo.codeSize = sizeof(kMvConvertSpv);
-    smInfo.pCode = kMvConvertSpv;
+    smInfo.codeSize = spirvBytes;
+    smInfo.pCode = spirv;
     VkShaderModule module = VK_NULL_HANDLE;
     if (createShaderModule(device, &smInfo, nullptr, &module) != VK_SUCCESS) return false;
     VkComputePipelineCreateInfo pInfo{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
@@ -83,21 +85,21 @@ bool MvConverter::Init(VkInstance instance, VkPhysicalDevice physicalDevice, VkD
     VkResult r = createComputePipelines(device, VK_NULL_HANDLE, 1, &pInfo, nullptr, &pipeline_);
     destroyShaderModule(device, module, nullptr);
     if (r != VK_SUCCESS) {
-        EFG_LOG("MvConverter: compute pipeline creation failed (%d)", r);
+        EFG_LOG("CopyPass %s: compute pipeline creation failed (%d)", name_, r);
         return false;
     }
     ready_ = true;
-    EFG_LOG("MvConverter ready (R16G16_SNORM -> R16G16_SFLOAT)");
+    EFG_LOG("CopyPass %s ready (-> format %d)", name_, format_);
     return true;
 }
 
-bool MvConverter::EnsureTargets(uint32_t width, uint32_t height) {
+bool CopyPass::EnsureTargets(uint32_t width, uint32_t height) {
     if (width == width_ && height == height_ && targets_[0].image) return true;
     DestroyTargets();
     for (auto& t : targets_) {
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ci.imageType = VK_IMAGE_TYPE_2D;
-        ci.format = VK_FORMAT_R16G16_SFLOAT;
+        ci.format = format_;
         ci.extent = {width, height, 1};
         ci.mipLevels = 1;
         ci.arrayLayers = 1;
@@ -127,18 +129,18 @@ bool MvConverter::EnsureTargets(uint32_t width, uint32_t height) {
         VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         vi.image = t.image;
         vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = VK_FORMAT_R16G16_SFLOAT;
+        vi.format = format_;
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         if (vkCreateImageView_(device_, &vi, nullptr, &t.view) != VK_SUCCESS) return false;
         t.initialized = false;
     }
     width_ = width;
     height_ = height;
-    EFG_LOG("MvConverter: allocated 2x %ux%u RG16F targets", width, height);
+    EFG_LOG("CopyPass %s: allocated 2x %ux%u targets", name_, width, height);
     return true;
 }
 
-void MvConverter::DestroyTargets() {
+void CopyPass::DestroyTargets() {
     for (auto& t : targets_) {
         if (t.view) vkDestroyImageView_(device_, t.view, nullptr);
         if (t.image) vkDestroyImage_(device_, t.image, nullptr);
@@ -148,7 +150,7 @@ void MvConverter::DestroyTargets() {
     width_ = height_ = 0;
 }
 
-void MvConverter::Shutdown() {
+void CopyPass::Shutdown() {
     if (!device_ || !vkDestroyPipeline_) return;
     DestroyTargets();
     if (pipeline_) vkDestroyPipeline_(device_, pipeline_, nullptr);
@@ -160,10 +162,11 @@ void MvConverter::Shutdown() {
     ready_ = false;
 }
 
-sl_bridge::ImageRef MvConverter::Convert(VkCommandBuffer cmd, const sl_bridge::ImageRef& src) {
-    if (!ready_ || !src.view || !src.width || !src.height) return {};
-    if (!EnsureTargets(src.width, src.height)) {
-        EFG_LOG("MvConverter: target allocation failed");
+sl_bridge::ImageRef CopyPass::Copy(VkCommandBuffer cmd, VkImageView srcView, uint32_t width, uint32_t height,
+                                   VkImageLayout srcLayout) {
+    if (!ready_ || !srcView || !width || !height) return {};
+    if (!EnsureTargets(width, height)) {
+        EFG_LOG("CopyPass %s: target allocation failed", name_);
         ready_ = false;
         return {};
     }
@@ -182,7 +185,7 @@ sl_bridge::ImageRef MvConverter::Convert(VkCommandBuffer cmd, const sl_bridge::I
                           0, nullptr, 1, &toWrite);
     t.initialized = true;
 
-    VkDescriptorImageInfo srcInfo{VK_NULL_HANDLE, src.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo srcInfo{VK_NULL_HANDLE, srcView, srcLayout};
     VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, t.view, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet writes[2]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -196,12 +199,13 @@ sl_bridge::ImageRef MvConverter::Convert(VkCommandBuffer cmd, const sl_bridge::I
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[1].pImageInfo = &dstInfo;
 
-    // DLSS-SR (evaluated right after this) binds its own state, and the game rebinds after it.
+    // Both insertion points (before DLSS-SR, before the HUD pass) are followed by work that binds its own
+    // pipeline and descriptors (DLSS-SR / a new render pass), so the game's bound state does not leak.
     vkCmdBindPipeline_(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdPushDescriptorSetKHR_(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 2, writes);
-    int32_t size[2] = {static_cast<int32_t>(src.width), static_cast<int32_t>(src.height)};
+    int32_t size[2] = {static_cast<int32_t>(width), static_cast<int32_t>(height)};
     vkCmdPushConstants_(cmd, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(size), size);
-    vkCmdDispatch_(cmd, (src.width + 7) / 8, (src.height + 7) / 8, 1);
+    vkCmdDispatch_(cmd, (width + 7) / 8, (height + 7) / 8, 1);
 
     VkImageMemoryBarrier toRead = toWrite;
     toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -211,7 +215,7 @@ sl_bridge::ImageRef MvConverter::Convert(VkCommandBuffer cmd, const sl_bridge::I
     vkCmdPipelineBarrier_(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr,
                           0, nullptr, 1, &toRead);
 
-    return {t.image, t.view, VK_FORMAT_R16G16_SFLOAT, src.width, src.height};
+    return {t.image, t.view, format_, width, height};
 }
 
 }  // namespace efg::render

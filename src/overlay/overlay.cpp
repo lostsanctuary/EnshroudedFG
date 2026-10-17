@@ -11,6 +11,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "hooks/hook_util.h"
+#include "debug/frame_trace.h"
 #include "hooks/hooks.h"
 #include "version.h"
 
@@ -105,6 +106,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     if ((msg == WM_KEYUP || msg == WM_SYSKEYUP) && static_cast<int>(wp) == key) return 0;
+    if (msg == WM_KEYDOWN && wp == VK_F11 && !(lp & (1 << 30)) && frame_trace::Enabled()) frame_trace::Arm();
     if (g_visible.load() && g_imguiContext) {
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
         if (msg == WM_INPUT) return DefWindowProcW(hwnd, msg, wp, lp);  // required cleanup, but hide from the game
@@ -273,6 +275,10 @@ void DrawMenu() {
         if (!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Not supported on this GPU (max %ux)", st.maxMultiplier);
     }
+    bool gameCamera = cfg.useGameCamera;
+    if (ImGui::Checkbox("Use game camera data", &gameCamera)) SetUseGameCamera(gameCamera);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Feed DLSS-G the game's real camera (position, rotation, FOV).\nOff = approximate camera.");
     ImGui::Spacing();
 
     if (!st.slActive) {

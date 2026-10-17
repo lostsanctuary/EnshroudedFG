@@ -55,6 +55,12 @@ struct SrInputs {
 // Called for the game's DLSS-SR evaluate; tags depth/MVs and sets the frame constants.
 void OnSrEvaluate(const SrInputs& in);
 
+// HUD-less colour: track the game-facing swapchain images and the game's views of them, and capture
+// the image right before the render pass that composites the HUD.
+void OnSwapchainImages(uint32_t count, const VkImage* images);
+void OnImageViewCreated(VkImageView view, VkImage image);
+void OnBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* info);
+
 // Snapshot for the overlay.
 struct FgStatus {
     bool slActive = false;        // Streamline loaded and device created

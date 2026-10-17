@@ -29,6 +29,7 @@ function(efg_shader name array)
     set(EFG_SHADER_HEADERS ${EFG_SHADER_HEADERS} ${hdr} PARENT_SCOPE)
 endfunction()
 efg_shader(mv_convert kMvConvertSpv)
+efg_shader(copy_rgba8 kCopyRgba8Spv)
 
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui)
 add_library(imgui STATIC
@@ -42,12 +43,14 @@ target_link_libraries(imgui PUBLIC Vulkan::Headers)
 
 add_library(EnshroudedFG SHARED
     src/dllmain.cpp
+    src/camera/camera_provider.cpp
     src/core/config.cpp
     src/core/log.cpp
     src/core/module_ranges.cpp
     src/sl/sl_bridge.cpp
-    src/render/mv_convert.cpp
+    src/render/copy_pass.cpp
     src/overlay/overlay.cpp
+    src/debug/frame_trace.cpp
     ${EFG_SHADER_HEADERS}
     src/hooks/loader_hooks.cpp
     src/hooks/vulkan_hooks.cpp

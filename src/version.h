@@ -1,3 +1,3 @@
 #pragma once
 
-#define EFG_VERSION_STRING "0.5.0-phase5"
+#define EFG_VERSION_STRING "0.6.3-phase6"

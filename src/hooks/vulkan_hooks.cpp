@@ -21,6 +21,7 @@
 
 #include "core/module_ranges.h"
 #include "hooks/hook_util.h"
+#include "debug/frame_trace.h"
 #include "hooks/hooks.h"
 #include "overlay/overlay.h"
 
@@ -238,7 +239,11 @@ VKAPI_ATTR VkResult VKAPI_CALL HookGetSwapchainImages(VkDevice device, VkSwapcha
             SlCallScope scope;
             r = sl::Proxies().getSwapchainImages(device, sc, count, images);
         }
-        if (r == VK_SUCCESS && images) overlay::OnSwapchainImages(sc, *count, images);
+        if (r == VK_SUCCESS && images) {
+            overlay::OnSwapchainImages(sc, *count, images);
+            sl::OnSwapchainImages(*count, images);
+            frame_trace::OnSwapchainImages(*count, images);
+        }
         return r;
     }
     return r_GetSwapchainImages(device, sc, count, images);
@@ -267,6 +272,7 @@ VKAPI_ATTR VkResult VKAPI_CALL HookQueuePresent(VkQueue queue, const VkPresentIn
                 (void*)queue, info->swapchainCount, info->waitSemaphoreCount, ChainTypes(info->pNext).c_str(),
                 sl::QueueActive() ? " via SL" : "");
     }
+    frame_trace::OnPresent(queue, info);
     NgxOnPresent(frame);
     VkPresentInfoKHR overlayInfo;
     const VkPresentInfoKHR* presentInfo = overlay::BeforePresent(queue, info, overlayInfo);
@@ -311,6 +317,29 @@ VKAPI_ATTR void VKAPI_CALL HookSetLatencyMarker(VkDevice device, VkSwapchainKHR 
         EFG_LOG("game vkSetLatencyMarkerNV %d presentID %llu", info->marker, (unsigned long long)info->presentID);
     }
     g_realSetLatencyMarker.load()(device, sc, info);
+}
+
+// ---- HUD-less capture (wrapped at lookup time) ----------------------------------------------
+
+PFN_vkCreateImageView r_CreateImageView = nullptr;
+PFN_vkCmdBeginRendering r_CmdBeginRendering = nullptr;
+PFN_vkCmdBeginRendering r_CmdBeginRenderingKHR = nullptr;
+
+VKAPI_ATTR VkResult VKAPI_CALL HookCreateImageView(VkDevice device, const VkImageViewCreateInfo* ci,
+                                                   const VkAllocationCallbacks* alloc, VkImageView* out) {
+    VkResult r = r_CreateImageView(device, ci, alloc, out);
+    if (r == VK_SUCCESS) sl::OnImageViewCreated(*out, ci->image);
+    return r;
+}
+
+VKAPI_ATTR void VKAPI_CALL HookCmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* ri) {
+    sl::OnBeginRendering(cmd, ri);
+    r_CmdBeginRendering(cmd, ri);
+}
+
+VKAPI_ATTR void VKAPI_CALL HookCmdBeginRenderingKHR(VkCommandBuffer cmd, const VkRenderingInfo* ri) {
+    sl::OnBeginRendering(cmd, ri);
+    r_CmdBeginRenderingKHR(cmd, ri);
 }
 
 // ---- lookup interception --------------------------------------------------------------------
@@ -362,6 +391,19 @@ PFN_vkVoidFunction InterceptByName(const char* name, PFN_vkVoidFunction real) {
     if (strcmp(name, "vkSetLatencySleepModeNV") == 0) return Wrap(real, g_realSetLatencySleepMode, &HookSetLatencySleepMode);
     if (strcmp(name, "vkLatencySleepNV") == 0) return Wrap(real, g_realLatencySleep, &HookLatencySleep);
     if (strcmp(name, "vkSetLatencyMarkerNV") == 0) return Wrap(real, g_realSetLatencyMarker, &HookSetLatencyMarker);
+    real = frame_trace::Intercept(name, real);  // no-op unless [Debug] FrameTrace=1
+    if (strcmp(name, "vkCreateImageView") == 0) {
+        r_CreateImageView = reinterpret_cast<PFN_vkCreateImageView>(real);
+        return reinterpret_cast<PFN_vkVoidFunction>(&HookCreateImageView);
+    }
+    if (strcmp(name, "vkCmdBeginRendering") == 0) {
+        r_CmdBeginRendering = reinterpret_cast<PFN_vkCmdBeginRendering>(real);
+        return reinterpret_cast<PFN_vkVoidFunction>(&HookCmdBeginRendering);
+    }
+    if (strcmp(name, "vkCmdBeginRenderingKHR") == 0) {
+        r_CmdBeginRenderingKHR = reinterpret_cast<PFN_vkCmdBeginRendering>(real);
+        return reinterpret_cast<PFN_vkVoidFunction>(&HookCmdBeginRenderingKHR);
+    }
     return real;
 }
 

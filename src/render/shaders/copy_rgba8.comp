@@ -1,0 +1,20 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+// Copies a colour image (e.g. the swapchain image just before the game draws its HUD) into an RGBA8
+// image we own, used as DLSS-G's HUD-less colour input.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform texture2D srcColor;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D dstColor;
+
+layout(push_constant) uniform Params {
+    ivec2 size;
+} params;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= params.size.x || p.y >= params.size.y) return;
+    imageStore(dstColor, p, texelFetch(srcColor, p, 0));
+}

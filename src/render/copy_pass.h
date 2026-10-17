@@ -1,21 +1,28 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
 #include "sl/sl_bridge.h"
 
 namespace efg::render {
 
-// Converts the game's R16G16_SNORM motion vectors (unsupported by Streamline's format table) into an
-// RG16F image we own. Recorded into the game's command buffer right before its DLSS-SR evaluate.
-// Two images alternate per frame, so a frame's copy is never overwritten while DLSS-G may still read it.
-class MvConverter {
+// A compute pass that copies a sampled source image into one of two images we own (alternating per
+// frame, so a frame's copy is never overwritten while DLSS-G may still read it). Recorded directly
+// into the game's command buffer. Used for:
+//  - motion vectors: R16G16_SNORM (not in Streamline's Vulkan format table) -> RG16F
+//  - HUD-less colour: the swapchain image right before the game composites its HUD -> RGBA8
+class CopyPass {
 public:
-    bool Init(VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device);
+    bool Init(const char* name, VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device,
+              VkFormat dstFormat, const uint32_t* spirv, size_t spirvBytes);
     void Shutdown();
+    bool Ready() const { return ready_; }
 
-    // Returns the converted image (layout GENERAL), or an empty ImageRef on failure.
-    sl_bridge::ImageRef Convert(VkCommandBuffer cmd, const sl_bridge::ImageRef& src);
-
-    static bool NeedsConversion(VkFormat format) { return format == VK_FORMAT_R16G16_SNORM; }
+    // `srcView` must be readable as a sampled image in `srcLayout`. Returns the copy (layout GENERAL),
+    // or an empty ImageRef on failure.
+    sl_bridge::ImageRef Copy(VkCommandBuffer cmd, VkImageView srcView, uint32_t width, uint32_t height,
+                             VkImageLayout srcLayout);
 
 private:
     struct Target {
@@ -27,7 +34,9 @@ private:
     bool EnsureTargets(uint32_t width, uint32_t height);
     void DestroyTargets();
 
+    const char* name_ = "";
     VkDevice device_ = VK_NULL_HANDLE;
+    VkFormat format_ = VK_FORMAT_UNDEFINED;
     VkPhysicalDeviceMemoryProperties memProps_{};
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

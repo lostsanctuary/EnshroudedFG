@@ -20,11 +20,16 @@
 #include <string>
 #include <unordered_map>
 
+#include "camera/camera_provider.h"
 #include "core/config.h"
 #include "core/log.h"
 #include "core/module_ranges.h"
+#include "debug/frame_trace.h"
 #include "overlay/overlay.h"
-#include "render/mv_convert.h"
+#include "hooks/hooks.h"
+#include "render/copy_pass.h"
+#include "render/copy_rgba8_spv.h"
+#include "render/mv_convert_spv.h"
 
 namespace efg::sl_bridge {
 namespace {
@@ -57,8 +62,16 @@ PFun_slPCLSetMarker* p_slPCLSetMarker = nullptr;
 
 DeviceProxies g_proxies{};
 VkPhysicalDevice g_physicalDevice = VK_NULL_HANDLE;
-render::MvConverter g_mvConverter;
-bool g_mvConverterTried = false;
+render::CopyPass g_mvCopy;       // R16G16_SNORM motion vectors -> RG16F
+render::CopyPass g_hudlessCopy;  // swapchain image before the HUD pass -> RGBA8 HUD-less colour
+bool g_copyPassesTried = false;
+PFN_vkCmdPipelineBarrier p_CmdPipelineBarrier = nullptr;
+
+// Game-facing swapchain images and the game's views of them (to recognise the HUD pass).
+std::mutex g_swapchainMutex;
+std::unordered_map<VkImage, uint32_t> g_swapchainImages;
+std::unordered_map<VkImageView, VkImage> g_swapchainViews;
+bool g_hudlessTagged = false;  // this frame's HUD-less colour has been captured and tagged
 
 // Current frame (single render thread in this game).
 sl::FrameToken* g_frame = nullptr;
@@ -277,6 +290,136 @@ void FillApproximateCamera(sl::Constants& c, const SrInputs& in) {
     c.cameraAspectRatio = aspect;
 }
 
+// ---- game camera (Phase 6) -----------------------------------------------------------------
+
+struct CameraState {
+    bool valid = false;
+    double position[3] = {};
+    sl::float3 right, up, fwd;
+    sl::float4x4 viewToClip;
+};
+CameraState g_prevCamera;
+double g_cameraOrigin[3] = {};  // keeps SL's float camera position small
+bool g_cameraOriginSet = false;
+int g_cameraLogBudget = 3;
+// Per-summary-interval camera statistics (logged with the DLSS-G state).
+unsigned g_camGameFrames = 0, g_camApproxFrames = 0, g_camResets = 0;
+double g_camMaxStep = 0;
+sl::float3 g_camLastFwd;
+double g_camLastPos[3] = {};
+
+sl::float3 Rotate(const float q[4], float vx, float vy, float vz) {
+    // v' = v + 2w(q x v) + 2 q x (q x v)
+    const float qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+    const float tx = 2.0f * (qy * vz - qz * vy), ty = 2.0f * (qz * vx - qx * vz), tz = 2.0f * (qx * vy - qy * vx);
+    return sl::float3(vx + qw * tx + (qy * tz - qz * ty), vy + qw * ty + (qz * tx - qx * tz),
+                      vz + qw * tz + (qx * ty - qy * tx));
+}
+
+sl::float4x4 Projection(float fovY, float aspect, float n, float f, bool reverseZ) {
+    const float ys = 1.0f / std::tan(fovY * 0.5f);
+    const float xs = ys / aspect;
+    sl::float4x4 p;
+    p[0] = sl::float4(xs, 0, 0, 0);
+    p[1] = sl::float4(0, ys, 0, 0);
+    if (reverseZ) {
+        p[2] = sl::float4(0, 0, -n / (f - n), 1);
+        p[3] = sl::float4(0, 0, n * f / (f - n), 0);
+    } else {
+        p[2] = sl::float4(0, 0, f / (f - n), 1);
+        p[3] = sl::float4(0, 0, -n * f / (f - n), 0);
+    }
+    return p;
+}
+
+// Camera-to-world with the translation given relative to the current camera (precision).
+sl::float4x4 CameraToCentredWorld(const sl::float3& r, const sl::float3& u, const sl::float3& f, float tx, float ty,
+                                  float tz) {
+    sl::float4x4 m;
+    m[0] = sl::float4(r.x, r.y, r.z, 0);
+    m[1] = sl::float4(u.x, u.y, u.z, 0);
+    m[2] = sl::float4(f.x, f.y, f.z, 0);
+    m[3] = sl::float4(tx, ty, tz, 1);
+    return m;
+}
+
+// Fills the camera part of the constants from the game's camera. Returns false (caller falls back to
+// the approximation) when the camera cannot be read.
+bool FillGameCamera(sl::Constants& c, const SrInputs& in, bool& forceReset) {
+    const camera::CameraSample cam = camera::Read();
+    if (!cam.valid) {
+        g_prevCamera.valid = false;
+        return false;
+    }
+    const Config& cfg = LoadConfig();
+    const float aspect = in.outputH ? float(in.outputW) / float(in.outputH) : 16.0f / 9.0f;
+    const float fovY = cam.hasProjection ? cam.fovY : cfg.fovYDegrees * 3.14159265f / 180.0f;
+    const float n = cam.hasProjection ? cam.nearPlane : cfg.nearPlane;
+    const float f = cam.hasProjection ? cam.farPlane : cfg.farPlane;
+
+    CameraState cur;
+    cur.valid = true;
+    for (int i = 0; i < 3; ++i) cur.position[i] = cam.position[i];
+    cur.right = Rotate(cam.rotation, 1, 0, 0);
+    cur.up = Rotate(cam.rotation, 0, 1, 0);
+    cur.fwd = Rotate(cam.rotation, 0, 0, 1);
+    cur.viewToClip = Projection(fovY, aspect, n, f, in.depthInverted);
+
+    if (!g_cameraOriginSet) {
+        for (int i = 0; i < 3; ++i) g_cameraOrigin[i] = cam.position[i];
+        g_cameraOriginSet = true;
+    }
+
+    c.cameraViewToClip = cur.viewToClip;
+    sl::matrixFullInvert(c.clipToCameraView, cur.viewToClip);
+    c.clipToLensClip = Identity();
+    c.cameraPinholeOffset = sl::float2(0, 0);
+    c.cameraPos = sl::float3(float(cam.position[0] - g_cameraOrigin[0]), float(cam.position[1] - g_cameraOrigin[1]),
+                             float(cam.position[2] - g_cameraOrigin[2]));
+    c.cameraRight = cur.right;
+    c.cameraUp = cur.up;
+    c.cameraFwd = cur.fwd;
+    c.cameraNear = n;
+    c.cameraFar = f;
+    c.cameraFOV = fovY;
+    c.cameraAspectRatio = aspect;
+
+    // clipToPrevClip = clip -> view -> (current camera -> previous camera) -> previous clip.
+    double dist = 0;
+    if (g_prevCamera.valid) {
+        const float dx = float(g_prevCamera.position[0] - cur.position[0]);
+        const float dy = float(g_prevCamera.position[1] - cur.position[1]);
+        const float dz = float(g_prevCamera.position[2] - cur.position[2]);
+        dist = std::sqrt(double(dx) * dx + double(dy) * dy + double(dz) * dz);
+        sl::float4x4 camToWorld = CameraToCentredWorld(cur.right, cur.up, cur.fwd, 0, 0, 0);
+        sl::float4x4 prevCamToWorld = CameraToCentredWorld(g_prevCamera.right, g_prevCamera.up, g_prevCamera.fwd, dx, dy, dz);
+        sl::float4x4 worldToPrevCam, camToPrevCam, clipToPrevCam;
+        sl::matrixOrthoNormalInvert(worldToPrevCam, prevCamToWorld);
+        sl::matrixMul(camToPrevCam, camToWorld, worldToPrevCam);
+        sl::matrixMul(clipToPrevCam, c.clipToCameraView, camToPrevCam);
+        sl::matrixMul(c.clipToPrevClip, clipToPrevCam, g_prevCamera.viewToClip);
+        sl::matrixFullInvert(c.prevClipToClip, c.clipToPrevClip);
+    } else {
+        c.clipToPrevClip = Identity();
+        c.prevClipToClip = Identity();
+        forceReset = true;
+    }
+    if (dist > 25.0) forceReset = true;  // teleport / respawn / cut
+    if (forceReset) ++g_camResets;
+    if (dist > g_camMaxStep) g_camMaxStep = dist;
+    g_camLastFwd = cur.fwd;
+    for (int i = 0; i < 3; ++i) g_camLastPos[i] = cam.position[i];
+
+    if (g_cameraLogBudget > 0) {
+        --g_cameraLogBudget;
+        EFG_LOG("game camera: pos (%.2f, %.2f, %.2f) m fwd (%.3f, %.3f, %.3f) fovY %.1f deg near %.3f far %.0f%s, moved %.3f m",
+                cam.position[0], cam.position[1], cam.position[2], cur.fwd.x, cur.fwd.y, cur.fwd.z,
+                fovY * 180.0f / 3.14159265f, n, f, cam.hasProjection ? "" : " (projection from ini)", dist);
+    }
+    g_prevCamera = cur;
+    return true;
+}
+
 sl::Resource MakeResource(const ImageRef& img, VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
     sl::Resource r(sl::ResourceType::eTex2d, (void*)img.image, nullptr, (void*)img.view, layout);
     r.width = img.width;
@@ -289,14 +432,28 @@ sl::Resource MakeResource(const ImageRef& img, VkImageLayout layout = VK_IMAGE_L
     return r;
 }
 
+void EnsureCopyPasses() {
+    if (g_copyPassesTried) return;
+    g_copyPassesTried = true;
+    VkDevice device = g_device.load();
+    p_CmdPipelineBarrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(RealDeviceProc(device, "vkCmdPipelineBarrier"));
+    if (!g_mvCopy.Init("mvec", g_instance, g_physicalDevice, device, VK_FORMAT_R16G16_SFLOAT, kMvConvertSpv,
+                       sizeof(kMvConvertSpv)))
+        EFG_LOG("motion-vector copy pass unavailable - tagging the game's SNORM motion vectors directly");
+    if (!g_hudlessCopy.Init("hudless", g_instance, g_physicalDevice, device, VK_FORMAT_R8G8B8A8_UNORM, kCopyRgba8Spv,
+                            sizeof(kCopyRgba8Spv)))
+        EFG_LOG("HUD-less copy pass unavailable - frame generation will run without HUD-less colour");
+}
+
 void TagNull() {
     if (!p_slSetTagForFrame || !g_frame) return;
     sl::ResourceTag tags[] = {
         sl::ResourceTag(nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent),
     };
     SlCallScope scope;
-    p_slSetTagForFrame(*g_frame, sl::ViewportHandle(0), tags, 2, nullptr);
+    p_slSetTagForFrame(*g_frame, sl::ViewportHandle(0), tags, 3, nullptr);
 }
 
 // Applies DLSS-G on/off and the configured multiplier; only calls into SL when either changes, so the
@@ -450,6 +607,7 @@ void OnInstanceCreated(VkInstance instance) {
 void OnDeviceCreated(VkPhysicalDevice physicalDevice, VkDevice device) {
     if (!g_initialized) return;
     g_physicalDevice = physicalDevice;
+    camera::Init();  // signature scan once, at load time
     SlCallScope scope;
     auto get = [&](const char* n) { return p_slGDPA(device, n); };
     g_proxies.createSwapchain = reinterpret_cast<PFN_vkCreateSwapchainKHR>(get("vkCreateSwapchainKHR"));
@@ -497,11 +655,15 @@ void OnDeviceCreated(VkPhysicalDevice physicalDevice, VkDevice device) {
 void OnDeviceDestroying(VkDevice device) {
     if (!g_initialized || device != g_device.load()) return;
     SetFrameGeneration(false);
-    g_mvConverter.Shutdown();
     g_device.store(VK_NULL_HANDLE);
-    SlCallScope scope;
-    EFG_LOG("slShutdown -> %s", ResultName(p_slShutdown()));
+    {
+        // Shut SL down first: it may still hold this frame's tags, which point at our copy images.
+        SlCallScope scope;
+        EFG_LOG("slShutdown -> %s", ResultName(p_slShutdown()));
+    }
     g_initialized.store(false);
+    g_mvCopy.Shutdown();
+    g_hudlessCopy.Shutdown();
 }
 
 bool DeviceActive(VkDevice device) { return device != VK_NULL_HANDLE && device == g_device.load(); }
@@ -527,16 +689,12 @@ void OnSrEvaluate(const SrInputs& in) {
     // Depth and motion vectors are the game's own persistent render-resolution images; they are not
     // rewritten before this frame's present, so SL may read them in place at present time.
     // Streamline cannot describe R16G16_SNORM, so those motion vectors are first copied into RG16F.
+    EnsureCopyPasses();
     ImageRef mvecImage = in.mvec;
     VkImageLayout mvecLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    if (render::MvConverter::NeedsConversion(in.mvec.format)) {
-        if (!g_mvConverterTried) {
-            g_mvConverterTried = true;
-            if (!g_mvConverter.Init(g_instance, g_physicalDevice, g_device.load())) {
-                EFG_LOG("motion-vector converter unavailable - tagging the game's SNORM motion vectors directly");
-            }
-        }
-        ImageRef converted = g_mvConverter.Convert(in.cmd, in.mvec);
+    if (in.mvec.format == VK_FORMAT_R16G16_SNORM && g_mvCopy.Ready()) {
+        ImageRef converted = g_mvCopy.Copy(in.cmd, in.mvec.view, in.mvec.width, in.mvec.height,
+                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         if (converted.image) {
             mvecImage = converted;
             mvecLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -552,14 +710,17 @@ void OnSrEvaluate(const SrInputs& in) {
     };
 
     sl::Constants c{};
-    FillApproximateCamera(c, in);
+    bool forceReset = false;
+    const bool gameCamera = LoadConfig().useGameCamera && FillGameCamera(c, in, forceReset);
+    if (!gameCamera) FillApproximateCamera(c, in);
+    ++(gameCamera ? g_camGameFrames : g_camApproxFrames);
     c.jitterOffset = sl::float2(in.jitterX, in.jitterY);
     // NGX MV scale converts the stored vectors to pixels; SL wants them normalized to [-1,1].
     c.mvecScale = sl::float2(in.mvScaleX / float(in.renderW), in.mvScaleY / float(in.renderH));
     c.depthInverted = B(in.depthInverted);
     c.cameraMotionIncluded = sl::Boolean::eTrue;
     c.motionVectors3D = sl::Boolean::eFalse;
-    c.reset = B(in.reset);
+    c.reset = B(in.reset || forceReset);
     c.orthographicProjection = sl::Boolean::eFalse;
     c.motionVectorsDilated = sl::Boolean::eFalse;
     c.motionVectorsJittered = B(in.mvJittered);
@@ -604,6 +765,8 @@ void AfterPresent(unsigned long long presentCount) {
     Marker(sl::PCLMarker::ePresentEnd);
     g_srStreak = g_frameHasSr ? g_srStreak + 1 : 0;
     g_frameHasSr = false;
+    g_hudlessTagged = false;
+    if (g_srStreak == 900) frame_trace::Arm();  // one automatic trace ~a few seconds into the world
 
     LARGE_INTEGER now, freq;
     QueryPerformanceCounter(&now);
@@ -624,9 +787,85 @@ void AfterPresent(unsigned long long presentCount) {
 
     if (presentCount == 2 || presentCount % 600 == 0) {
         LogDlssgState(presentCount == 2 ? "first frames" : (g_fgOn ? "periodic, FG on" : "periodic, FG off"));
+        if (g_camGameFrames || g_camApproxFrames) {
+            EFG_LOG("camera: %u frames game, %u approx, %u forced resets, max step %.2f m, last pos (%.1f, %.1f, %.1f) "
+                    "fwd (%.3f, %.3f, %.3f)",
+                    g_camGameFrames, g_camApproxFrames, g_camResets, g_camMaxStep, g_camLastPos[0], g_camLastPos[1],
+                    g_camLastPos[2], g_camLastFwd.x, g_camLastFwd.y, g_camLastFwd.z);
+            g_camGameFrames = g_camApproxFrames = g_camResets = 0;
+            g_camMaxStep = 0;
+        }
         if (presentCount == 2 || presentCount % 6000 == 0) LogReflexState("periodic");
     }
     BeginFrame();  // next frame's simulation starts now (Reflex sleep happens here)
+}
+
+void OnSwapchainImages(uint32_t count, const VkImage* images) {
+    if (!images) return;
+    std::lock_guard lock(g_swapchainMutex);
+    g_swapchainImages.clear();
+    g_swapchainViews.clear();
+    for (uint32_t i = 0; i < count; ++i) g_swapchainImages[images[i]] = i;
+}
+
+void OnImageViewCreated(VkImageView view, VkImage image) {
+    std::lock_guard lock(g_swapchainMutex);
+    if (g_swapchainImages.count(image)) g_swapchainViews[view] = image;
+}
+
+// The game composites its HUD in the first render pass that loads the swapchain image after DLSS-SR
+// (see PLAN.md, Phase 6 frame trace). Right before that pass, copy the image as HUD-less colour.
+void OnBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* ri) {
+    if (!g_frameHasSr || g_hudlessTagged || !ri || ri->colorAttachmentCount < 1 || !ri->pColorAttachments) return;
+    if (LoadConfig().multiplier < 2 || !g_frame || !p_slSetTagForFrame) return;
+    const VkRenderingAttachmentInfo& a = ri->pColorAttachments[0];
+    if (a.loadOp != VK_ATTACHMENT_LOAD_OP_LOAD || !a.imageView) return;
+    VkImage image;
+    {
+        std::lock_guard lock(g_swapchainMutex);
+        auto it = g_swapchainViews.find(a.imageView);
+        if (it == g_swapchainViews.end()) return;
+        image = it->second;
+    }
+    g_hudlessTagged = true;  // one attempt per frame
+    if (!g_hudlessCopy.Ready() || !p_CmdPipelineBarrier) return;
+    const uint32_t w = ri->renderArea.extent.width, h = ri->renderArea.extent.height;
+
+    // The image is in the pass's attachment layout here; make it readable for the copy and back.
+    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    b.oldLayout = a.imageLayout;
+    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = image;
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    p_CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    ImageRef hudless = g_hudlessCopy.Copy(cmd, a.imageView, w, h, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b.newLayout = a.imageLayout;
+    p_CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                         nullptr, 0, nullptr, 1, &b);
+    if (!hudless.image) return;
+
+    sl::Resource res = MakeResource(hudless, VK_IMAGE_LAYOUT_GENERAL);
+    res.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    sl::Extent extent{0, 0, w, h};
+    sl::ResourceTag tag(&res, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent);
+    sl::Result r;
+    {
+        SlCallScope scope;
+        r = p_slSetTagForFrame(*g_frame, sl::ViewportHandle(0), &tag, 1, reinterpret_cast<sl::CommandBuffer*>(cmd));
+    }
+    static int logBudget = 2;
+    if (logBudget > 0 || r != sl::Result::eOk) {
+        if (logBudget > 0) --logBudget;
+        EFG_LOG("frame %u: HUD-less colour captured from swapchain image (%ux%u, layout %d) -> %s", (uint32_t)*g_frame,
+                w, h, a.imageLayout, ResultName(r));
+    }
 }
 
 FgStatus GetFgStatus() {

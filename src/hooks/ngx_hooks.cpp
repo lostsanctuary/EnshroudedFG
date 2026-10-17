@@ -16,6 +16,7 @@
 #include <unordered_map>
 
 #include "core/module_ranges.h"
+#include "debug/frame_trace.h"
 #include "hooks/hook_util.h"
 #include "hooks/hooks.h"
 
@@ -244,6 +245,7 @@ NVSDK_NGX_Result NVSDK_CONV HookEvaluateFeature(VkCommandBuffer cmd, const NVSDK
         fg.reset = in.reset != 0;
         fg.depthInverted = (fi.createFlags & NVSDK_NGX_DLSS_Feature_Flags_DepthInverted) != 0;
         fg.mvJittered = (fi.createFlags & NVSDK_NGX_DLSS_Feature_Flags_MVJittered) != 0;
+        frame_trace::OnSrEvaluate(cmd, in.color, in.output, in.depth, in.mvec);
         sl_bridge::OnSrEvaluate(fg);
     }
     return g_origEvaluateFeature(cmd, h, p, cb);

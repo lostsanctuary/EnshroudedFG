@@ -226,6 +226,46 @@ Runtime files: `winmm.dll` and `EnshroudedFG.ini` go next to the exe. The SL DLL
 - **Pause FG when there's no 3D frame:** set all tags to null and FG off on frames with no DLSS evaluate (menus, loading, map screen).
 - **Window changes:** set `eOff` before resize, minimize or fullscreen toggles, and on alt-tab.
 
+**Phase 6 status (2026-10-17): HUD-less ✅ (v0.6.1), camera matrices in progress.**
+
+**Frame tracer.** `[Debug] FrameTrace=1` enables it; F11 traces one frame, plus one automatic trace after 900 world frames. Output goes to `EnshroudedFG\frame_trace.txt` (`src/debug/frame_trace.*`). A traced world frame looks like this:
+
+1. DLSS-SR: RGBA16F 1280×720 → 1920×1080.
+2. One compute dispatch tonemaps straight into the **swapchain image**, as GENERAL.
+3. A compute downsample chain to 640/320/160 RGBA8 (UI blur backgrounds).
+4. Two off-screen RGBA8 2048×1208 UI passes, with 35 and 106 draws.
+5. **A final `vkCmdBeginRendering` on the swapchain image (loadOp LOAD, 91 draws) composites the HUD.**
+6. Present.
+
+**HUD-less colour**
+- Capture point: in the `vkCmdBeginRendering` hook, on the first pass after DLSS-SR whose colour attachment is the swapchain image with LOAD.
+- At that point we insert barrier → compute copy (`copy_rgba8.comp`, sharing the generic `render::CopyPass` with the MV conversion) → barrier, writing into ping-pong RGBA8 images.
+- The copy is tagged `kBufferTypeHUDLessColor` (eValidUntilPresent, 1920×1080).
+- Swapchain images and the game's views of them are tracked through the `vkGetSwapchainImagesKHR` and `vkCreateImageView` hooks.
+
+**User test at 4x–6x:** "HUD clean now", and the world "looks good".
+
+**Game camera** (`src/camera/camera_provider.*`), from static reverse engineering of build 25988036. All five byte signatures resolved uniquely in-game.
+
+| What | Where |
+|---|---|
+| Static camera transform | exe+0x1FC4F68, found via the camera-copy setter signature |
+| Camera inside GameClient | `module(exe+0x1FE2CB0) → +0x10 → +0x38 → [3] (Play, id check) → +0x1B8 = GameClient`, camera at +0x4672A8 |
+
+- **Layout:** 3×int64 position in 32.32 fixed point, then a quaternion (x, y, z, w), then scale. Near/far are at +0x38/+0x3C and the vertical FOV in radians at +0x40.
+- **Conventions:** left-handed, +Y up, +Z forward, row vectors.
+- **What SL receives:** our reverse-Z projection built from the game's FOV/near/far, and camera vectors from the quaternion. `clipToPrevClip` comes from the previous frame's camera, with positions centred on the current camera for precision. Reset is forced if the camera jumps more than 25 m.
+- **Safety:** reads go through SEH-guarded copies, and any failed read or sanity check falls back to the approximation.
+- **Toggle:** `[Camera] Source=game|approx`, or the "Use game camera data" menu checkbox.
+- **User A/B at 4x–6x:** the game camera looked better.
+- **v0.6.3 verification (2 min at 6x):**
+  - Every frame used the game camera, with no forced resets and a per-frame step of 0.2–1.6 m.
+  - `framesPresented 6` the whole time; rendered fps ~75–80, so ~450–480 output.
+  - Clean `slShutdown`.
+  - Right after entering the world, DLSS-G presents 1 frame/frame for a few seconds while the game still holds its static spawn camera (identity rotation). It recovers as soon as the camera moves. This is benign and left as is.
+- **Cost of higher multipliers (input to Phase 7):** rendered fps drops from ~147 (no FG) to ~119 (2x) to ~77 (6x).
+- **Fix:** SL shutdown now runs before our copy images are freed. v0.6.2 crashed inside SL's exception handler at exit.
+
 ### Phase 7: Hardening and packaging
 - **VSync:** Vulkan FG doesn't support vsync. Force `MAILBOX`/`IMMEDIATE` when FG is on, warn about in-game vsync, and recommend G-Sync plus a frame cap through the overlay.
 - **Overlays:** test with RTSS, OBS and the Steam overlay.

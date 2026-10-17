@@ -40,6 +40,7 @@ void WriteFloat(const wchar_t* section, const wchar_t* key, float v, const wchar
 void WriteDefaults(const Config& c) {
     WriteInt(L"FrameGen", L"Multiplier", c.multiplier);
     WriteInt(L"Overlay", L"ToggleKey", c.overlayKey);
+    WritePrivateProfileStringW(L"Camera", L"Source", L"game", IniPath().c_str());
     WriteFloat(L"Camera", L"FovYDegrees", c.fovYDegrees, L"%.1f");
     WriteFloat(L"Camera", L"Near", c.nearPlane, L"%.2f");
     WriteFloat(L"Camera", L"Far", c.farPlane, L"%.0f");
@@ -54,11 +55,14 @@ Config& Mutable() {
         if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) WriteDefaults(c);
         c.multiplier = Clamp(static_cast<int>(GetPrivateProfileIntW(L"FrameGen", L"Multiplier", c.multiplier, path.c_str())), 1, 6);
         c.overlayKey = static_cast<int>(GetPrivateProfileIntW(L"Overlay", L"ToggleKey", c.overlayKey, path.c_str()));
+        wchar_t source[32]{};
+        GetPrivateProfileStringW(L"Camera", L"Source", L"game", source, 32, path.c_str());
+        c.useGameCamera = _wcsicmp(source, L"approx") != 0;
         c.fovYDegrees = ReadFloat(L"Camera", L"FovYDegrees", c.fovYDegrees);
         c.nearPlane = ReadFloat(L"Camera", L"Near", c.nearPlane);
         c.farPlane = ReadFloat(L"Camera", L"Far", c.farPlane);
-        EFG_LOG("config: multiplier %dx, overlay key 0x%02x, fovY %.1f, near %.2f, far %.0f", c.multiplier, c.overlayKey,
-                c.fovYDegrees, c.nearPlane, c.farPlane);
+        EFG_LOG("config: multiplier %dx, overlay key 0x%02x, camera %s (fallback fovY %.1f, near %.2f, far %.0f)",
+                c.multiplier, c.overlayKey, c.useGameCamera ? "game" : "approx", c.fovYDegrees, c.nearPlane, c.farPlane);
         return c;
     }();
     return cfg;
@@ -75,6 +79,14 @@ void SetMultiplier(int multiplier) {
     c.multiplier = multiplier;
     WriteInt(L"FrameGen", L"Multiplier", multiplier);
     EFG_LOG("config: multiplier set to %dx (saved)", multiplier);
+}
+
+void SetUseGameCamera(bool use) {
+    Config& c = Mutable();
+    if (c.useGameCamera == use) return;
+    c.useGameCamera = use;
+    WritePrivateProfileStringW(L"Camera", L"Source", use ? L"game" : L"approx", IniPath().c_str());
+    EFG_LOG("config: camera source set to %s (saved)", use ? "game" : "approx");
 }
 
 }  // namespace efg
