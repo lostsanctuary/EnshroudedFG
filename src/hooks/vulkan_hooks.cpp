@@ -373,6 +373,14 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL HookGetInstanceProcAddr(VkInstance inst
 
 }  // namespace
 
+PFN_RealVoid RealDeviceProc(void* device, const char* name) {
+    return g_origGDPA ? reinterpret_cast<PFN_RealVoid>(g_origGDPA(static_cast<VkDevice>(device), name)) : nullptr;
+}
+
+PFN_RealVoid RealInstanceProc(void* instance, const char* name) {
+    return g_origGIPA ? reinterpret_cast<PFN_RealVoid>(g_origGIPA(static_cast<VkInstance>(instance), name)) : nullptr;
+}
+
 void InstallVulkanHooks(HMODULE vulkan1) {
     wchar_t path[MAX_PATH]{};
     GetModuleFileNameW(vulkan1, path, MAX_PATH);

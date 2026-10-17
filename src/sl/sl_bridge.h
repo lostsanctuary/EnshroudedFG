@@ -35,6 +35,24 @@ struct DeviceProxies {
 };
 const DeviceProxies& Proxies();
 
+// One DLSS-SR evaluation's inputs, captured by the NGX hook (render resolution).
+struct ImageRef {
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    uint32_t width = 0, height = 0;
+};
+struct SrInputs {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    ImageRef depth, mvec;
+    float jitterX = 0, jitterY = 0;    // pixels
+    float mvScaleX = 0, mvScaleY = 0;  // NGX MV scale (multiplies MVs into pixels)
+    uint32_t renderW = 0, renderH = 0, outputW = 0, outputH = 0;
+    bool reset = false, depthInverted = false, mvJittered = false;
+};
+// Called for the game's DLSS-SR evaluate; tags depth/MVs and sets the frame constants.
+void OnSrEvaluate(const SrInputs& in);
+
 // Frame pacing / latency markers, driven from the game's acquire and present calls.
 void OnAcquire();
 void BeforePresent();

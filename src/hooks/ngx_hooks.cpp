@@ -1,9 +1,8 @@
 // NGX interception: the game's statically linked NGX SDK calls these _nvngx.dll exports.
 // CreateFeature tells us DLSS SR's flags and sizes; EvaluateFeature gives us the per-frame
-// depth / motion vectors / jitter that frame generation will need. Phase 2: observe and log.
+// depth / motion vectors / jitter, which are handed to Streamline for frame generation.
 
-#define VK_NO_PROTOTYPES
-#include <vulkan/vulkan.h>
+#include "sl/sl_bridge.h"  // Vulkan headers (VK_NO_PROTOTYPES)
 
 #include <nvsdk_ngx_vk.h>
 
@@ -16,6 +15,7 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "core/module_ranges.h"
 #include "hooks/hook_util.h"
 #include "hooks/hooks.h"
 
@@ -55,6 +55,7 @@ struct SrInputs {
     VkImage color = VK_NULL_HANDLE, output = VK_NULL_HANDLE, depth = VK_NULL_HANDLE, mvec = VK_NULL_HANDLE;
     VkFormat colorFmt = VK_FORMAT_UNDEFINED, outputFmt = VK_FORMAT_UNDEFINED, depthFmt = VK_FORMAT_UNDEFINED,
              mvecFmt = VK_FORMAT_UNDEFINED;
+    VkImageView depthView = VK_NULL_HANDLE, mvecView = VK_NULL_HANDLE;
     unsigned colorW = 0, colorH = 0, outputW = 0, outputH = 0, depthW = 0, depthH = 0, mvecW = 0, mvecH = 0;
     float jitterX = 0, jitterY = 0, mvScaleX = 0, mvScaleY = 0, preExposure = 0, frameTimeMs = 0;
     int reset = 0;
@@ -63,7 +64,9 @@ struct SrInputs {
 };
 
 std::mutex g_mutex;
-std::unordered_map<unsigned, FeatureInfo> g_features;  // by NVSDK_NGX_Handle::Id
+// Keyed by handle address: handle ids are only unique per NGX context, and Streamline's DLSS-G runs in
+// its own context next to the game's (both start numbering at 1).
+std::unordered_map<const NVSDK_NGX_Handle*, FeatureInfo> g_features;
 SrInputs g_lastInputs;
 
 // Per-present-interval statistics.
@@ -88,7 +91,8 @@ const char* FeatureName(NVSDK_NGX_Feature f) {
 
 unsigned HandleId(const NVSDK_NGX_Handle* h) { return h ? *reinterpret_cast<const unsigned*>(h) : ~0u; }
 
-void ReadImage(const NVSDK_NGX_Parameter* p, const char* name, VkImage& img, VkFormat& fmt, unsigned& w, unsigned& h) {
+void ReadImage(const NVSDK_NGX_Parameter* p, const char* name, VkImage& img, VkFormat& fmt, unsigned& w, unsigned& h,
+               VkImageView* view = nullptr) {
     void* v = nullptr;
     if (NVSDK_NGX_FAILED(p->Get(name, &v)) || !v) return;
     auto* res = static_cast<const NVSDK_NGX_Resource_VK*>(v);
@@ -97,6 +101,7 @@ void ReadImage(const NVSDK_NGX_Parameter* p, const char* name, VkImage& img, VkF
     fmt = res->Resource.ImageViewInfo.Format;
     w = res->Resource.ImageViewInfo.Width;
     h = res->Resource.ImageViewInfo.Height;
+    if (view) *view = res->Resource.ImageViewInfo.ImageView;
 }
 
 FeatureInfo ReadCreateParams(NVSDK_NGX_Feature feature, const NVSDK_NGX_Parameter* p) {
@@ -124,7 +129,7 @@ void RecordFeature(const char* api, NVSDK_NGX_Feature feature, const NVSDK_NGX_P
             !!(f & NVSDK_NGX_DLSS_Feature_Flags_DepthInverted), !!(f & NVSDK_NGX_DLSS_Feature_Flags_AutoExposure));
     if (NVSDK_NGX_SUCCEED(r) && h) {
         std::lock_guard lock(g_mutex);
-        g_features[HandleId(h)] = fi;
+        g_features[h] = fi;
     }
 }
 
@@ -150,40 +155,43 @@ NVSDK_NGX_Result NVSDK_CONV HookInit(void* a1, void* a2, void* a3, void* a4, voi
 NVSDK_NGX_Result NVSDK_CONV HookCreateFeature(VkCommandBuffer cmd, NVSDK_NGX_Feature feature,
                                               NVSDK_NGX_Parameter* p, NVSDK_NGX_Handle** out) {
     NVSDK_NGX_Result r = g_origCreateFeature(cmd, feature, p, out);
-    RecordFeature("CreateFeature", feature, p, r, out ? *out : nullptr);
+    if (!IsInternalAddress(_ReturnAddress())) RecordFeature("CreateFeature", feature, p, r, out ? *out : nullptr);
     return r;
 }
 
 NVSDK_NGX_Result NVSDK_CONV HookCreateFeature1(VkDevice device, VkCommandBuffer cmd, NVSDK_NGX_Feature feature,
                                                NVSDK_NGX_Parameter* p, NVSDK_NGX_Handle** out) {
     NVSDK_NGX_Result r = g_origCreateFeature1(device, cmd, feature, p, out);
-    RecordFeature("CreateFeature1", feature, p, r, out ? *out : nullptr);
+    if (!IsInternalAddress(_ReturnAddress())) RecordFeature("CreateFeature1", feature, p, r, out ? *out : nullptr);
     return r;
 }
 
 NVSDK_NGX_Result NVSDK_CONV HookReleaseFeature(NVSDK_NGX_Handle* h) {
-    EFG_LOG("NGX ReleaseFeature handle %u", HandleId(h));
-    {
+    if (!IsInternalAddress(_ReturnAddress())) {
+        EFG_LOG("NGX ReleaseFeature handle %u (%p)", HandleId(h), (void*)h);
         std::lock_guard lock(g_mutex);
-        g_features.erase(HandleId(h));
+        g_features.erase(h);
     }
     return g_origReleaseFeature(h);
 }
 
 NVSDK_NGX_Result NVSDK_CONV HookEvaluateFeature(VkCommandBuffer cmd, const NVSDK_NGX_Handle* h,
                                                 const NVSDK_NGX_Parameter* p, PFN_NVSDK_NGX_ProgressCallback cb) {
+    if (IsInternalAddress(_ReturnAddress())) return g_origEvaluateFeature(cmd, h, p, cb);  // SL's DLSS-G
     bool isSr = false;
+    FeatureInfo fi;
     {
         std::lock_guard lock(g_mutex);
-        auto it = g_features.find(HandleId(h));
+        auto it = g_features.find(h);
         isSr = it != g_features.end() && it->second.feature == NVSDK_NGX_Feature_SuperSampling;
+        if (isSr) fi = it->second;
     }
     if (isSr && p) {
         SrInputs in;
         ReadImage(p, NVSDK_NGX_Parameter_Color, in.color, in.colorFmt, in.colorW, in.colorH);
         ReadImage(p, NVSDK_NGX_Parameter_Output, in.output, in.outputFmt, in.outputW, in.outputH);
-        ReadImage(p, NVSDK_NGX_Parameter_Depth, in.depth, in.depthFmt, in.depthW, in.depthH);
-        ReadImage(p, NVSDK_NGX_Parameter_MotionVectors, in.mvec, in.mvecFmt, in.mvecW, in.mvecH);
+        ReadImage(p, NVSDK_NGX_Parameter_Depth, in.depth, in.depthFmt, in.depthW, in.depthH, &in.depthView);
+        ReadImage(p, NVSDK_NGX_Parameter_MotionVectors, in.mvec, in.mvecFmt, in.mvecW, in.mvecH, &in.mvecView);
         p->Get(NVSDK_NGX_Parameter_Jitter_Offset_X, &in.jitterX);
         p->Get(NVSDK_NGX_Parameter_Jitter_Offset_Y, &in.jitterY);
         p->Get(NVSDK_NGX_Parameter_MV_Scale_X, &in.mvScaleX);
@@ -218,6 +226,25 @@ NVSDK_NGX_Result NVSDK_CONV HookEvaluateFeature(VkCommandBuffer cmd, const NVSDK
                     in.preExposure, in.frameTimeMs, in.hasExposureTex);
         }
         g_lastInputs = in;
+    }
+    if (isSr && p) {
+        const SrInputs& in = g_lastInputs;  // single render thread: safe to read back outside the lock
+        sl_bridge::SrInputs fg;
+        fg.cmd = cmd;
+        fg.depth = {in.depth, in.depthView, in.depthFmt, in.depthW, in.depthH};
+        fg.mvec = {in.mvec, in.mvecView, in.mvecFmt, in.mvecW, in.mvecH};
+        fg.jitterX = in.jitterX;
+        fg.jitterY = in.jitterY;
+        fg.mvScaleX = in.mvScaleX;
+        fg.mvScaleY = in.mvScaleY;
+        fg.renderW = in.subrectW ? in.subrectW : in.colorW;
+        fg.renderH = in.subrectH ? in.subrectH : in.colorH;
+        fg.outputW = in.outputW;
+        fg.outputH = in.outputH;
+        fg.reset = in.reset != 0;
+        fg.depthInverted = (fi.createFlags & NVSDK_NGX_DLSS_Feature_Flags_DepthInverted) != 0;
+        fg.mvJittered = (fi.createFlags & NVSDK_NGX_DLSS_Feature_Flags_MVJittered) != 0;
+        sl_bridge::OnSrEvaluate(fg);
     }
     return g_origEvaluateFeature(cmd, h, p, cb);
 }

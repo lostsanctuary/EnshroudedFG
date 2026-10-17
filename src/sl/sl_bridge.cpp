@@ -8,15 +8,22 @@
 
 #include <sl.h>
 #include <sl_dlss_g.h>
+#include <sl_matrix_helpers.h>
 #include <sl_pcl.h>
 #include <sl_reflex.h>
 #include <sl_security.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 
+#include "core/config.h"
 #include "core/log.h"
 #include "core/module_ranges.h"
+#include "render/mv_convert.h"
 
 namespace efg::sl_bridge {
 namespace {
@@ -34,6 +41,8 @@ PFun_slIsFeatureSupported* p_slIsFeatureSupported = nullptr;
 PFun_slGetFeatureRequirements* p_slGetFeatureRequirements = nullptr;
 PFun_slGetFeatureFunction* p_slGetFeatureFunction = nullptr;
 PFun_slGetNewFrameToken* p_slGetNewFrameToken = nullptr;
+PFun_slSetTagForFrame* p_slSetTagForFrame = nullptr;
+PFun_slSetConstants* p_slSetConstants = nullptr;
 PFN_vkGetInstanceProcAddr p_slGIPA = nullptr;
 PFN_vkGetDeviceProcAddr p_slGDPA = nullptr;
 
@@ -46,10 +55,21 @@ PFun_slReflexGetState* p_slReflexGetState = nullptr;
 PFun_slPCLSetMarker* p_slPCLSetMarker = nullptr;
 
 DeviceProxies g_proxies{};
+VkPhysicalDevice g_physicalDevice = VK_NULL_HANDLE;
+render::MvConverter g_mvConverter;
+bool g_mvConverterTried = false;
 
 // Current frame (single render thread in this game).
 sl::FrameToken* g_frame = nullptr;
 bool g_simEnded = false;
+
+// Frame generation state.
+bool g_frameHasSr = false;   // this frame had a DLSS-SR evaluate (3D world frame) and is tagged
+int g_srStreak = 0;          // consecutive presented frames with SR inputs
+bool g_fgOn = false;         // DLSS-G mode currently set to eOn
+uint32_t g_framesToGenerateMax = 0;
+SrInputs g_lastSr{};
+constexpr int kStreakToEnable = 3;  // world frames required before turning FG on (avoids menu flicker)
 
 const char* ResultName(sl::Result r) {
     switch (r) {
@@ -97,11 +117,30 @@ const char* ResultName(sl::Result r) {
     }
 }
 
+// SL warnings/errors are mirrored into our log. Identical messages (ignoring SL's timestamp prefix)
+// are logged a few times and then only counted, so a per-frame complaint cannot flood the log.
 void SlLogCallback(sl::LogType type, const char* msg) {
     if (type == sl::LogType::eInfo) return;  // full detail goes to sl.log
     std::string m(msg ? msg : "");
     while (!m.empty() && (m.back() == '\n' || m.back() == '\r')) m.pop_back();
-    EFG_LOG("[SL %s] %s", type == sl::LogType::eError ? "error" : "warn", m.c_str());
+    // "[hh-mm-ss][streamline][warn][tid:N][Ns:Nms:Nus]file.cpp:line[func] text" -> key from "file.cpp:..."
+    size_t keyStart = m.find("]", m.find("us]") == std::string::npos ? 0 : m.find("us]"));
+    std::string key = keyStart == std::string::npos ? m : m.substr(keyStart + 1);
+
+    static std::mutex mutex;
+    static std::unordered_map<std::string, unsigned> counts;
+    unsigned n;
+    {
+        std::lock_guard lock(mutex);
+        n = ++counts[key];
+    }
+    constexpr unsigned kShown = 3;
+    if (n <= kShown) {
+        EFG_LOG("[SL %s] %s%s", type == sl::LogType::eError ? "error" : "warn", m.c_str(),
+                n == kShown ? "  (further repeats counted)" : "");
+    } else if (n % 10000 == 0) {
+        EFG_LOG("[SL] message repeated %u times: %s", n, key.c_str());
+    }
 }
 
 template <class T>
@@ -149,6 +188,7 @@ void LogDlssgState(const char* when) {
         SlCallScope scope;
         r = p_slDLSSGGetState(sl::ViewportHandle(0), st, &opts);
     }
+    if (r == sl::Result::eOk && st.numFramesToGenerateMax) g_framesToGenerateMax = st.numFramesToGenerateMax;
     EFG_LOG("DLSS-G state (%s): %s, status 0x%x, numFramesToGenerateMax %u, framesPresented %u, minWidthOrHeight %u, "
             "vsyncSupport %d, dynamicMFG %d, VRAM %.1f MB",
             when, ResultName(r), (unsigned)st.status, st.numFramesToGenerateMax, st.numFramesActuallyPresented,
@@ -180,6 +220,97 @@ void Marker(sl::PCLMarker m) {
         SlCallScope scope;
         p_slPCLSetMarker(m, *g_frame);
     }
+}
+
+sl::Boolean B(bool v) { return v ? sl::Boolean::eTrue : sl::Boolean::eFalse; }
+
+sl::float4x4 Identity() {
+    sl::float4x4 m;
+    m[0] = sl::float4(1, 0, 0, 0);
+    m[1] = sl::float4(0, 1, 0, 0);
+    m[2] = sl::float4(0, 0, 1, 0);
+    m[3] = sl::float4(0, 0, 0, 1);
+    return m;
+}
+
+// Approximate camera: the game's matrices are not known yet (Phase 4 step A). Row-vector,
+// left-handed perspective with reverse-Z (near -> 1, far -> 0), matching the game's inverted depth.
+// Motion vectors already contain camera motion, so the clip-to-previous-clip transforms are identity.
+void FillApproximateCamera(sl::Constants& c, const SrInputs& in) {
+    const Config& cfg = LoadConfig();
+    const float aspect = in.outputH ? float(in.outputW) / float(in.outputH) : 16.0f / 9.0f;
+    const float fovY = cfg.fovYDegrees * 3.14159265f / 180.0f;
+    const float ys = 1.0f / std::tan(fovY * 0.5f);
+    const float xs = ys / aspect;
+    const float n = cfg.nearPlane, f = cfg.farPlane;
+    sl::float4x4 proj;
+    if (in.depthInverted) {
+        proj[0] = sl::float4(xs, 0, 0, 0);
+        proj[1] = sl::float4(0, ys, 0, 0);
+        proj[2] = sl::float4(0, 0, -n / (f - n), 1);
+        proj[3] = sl::float4(0, 0, n * f / (f - n), 0);
+    } else {
+        proj[0] = sl::float4(xs, 0, 0, 0);
+        proj[1] = sl::float4(0, ys, 0, 0);
+        proj[2] = sl::float4(0, 0, f / (f - n), 1);
+        proj[3] = sl::float4(0, 0, -n * f / (f - n), 0);
+    }
+    c.cameraViewToClip = proj;
+    sl::matrixFullInvert(c.clipToCameraView, proj);
+    c.clipToLensClip = Identity();
+    c.clipToPrevClip = Identity();
+    c.prevClipToClip = Identity();
+    c.cameraPinholeOffset = sl::float2(0, 0);
+    c.cameraPos = sl::float3(0, 0, 0);
+    c.cameraUp = sl::float3(0, 1, 0);
+    c.cameraRight = sl::float3(1, 0, 0);
+    c.cameraFwd = sl::float3(0, 0, 1);
+    c.cameraNear = n;
+    c.cameraFar = f;
+    c.cameraFOV = fovY;
+    c.cameraAspectRatio = aspect;
+}
+
+sl::Resource MakeResource(const ImageRef& img, VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+    sl::Resource r(sl::ResourceType::eTex2d, (void*)img.image, nullptr, (void*)img.view, layout);
+    r.width = img.width;
+    r.height = img.height;
+    r.nativeFormat = img.format;
+    r.mipLevels = 1;
+    r.arrayLayers = 1;
+    r.flags = 0;
+    r.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    return r;
+}
+
+void TagNull() {
+    if (!p_slSetTagForFrame || !g_frame) return;
+    sl::ResourceTag tags[] = {
+        sl::ResourceTag(nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent),
+    };
+    SlCallScope scope;
+    p_slSetTagForFrame(*g_frame, sl::ViewportHandle(0), tags, 2, nullptr);
+}
+
+void SetFrameGeneration(bool on) {
+    if (!p_slDLSSGSetOptions || on == g_fgOn) return;
+    const Config& cfg = LoadConfig();
+    sl::DLSSGOptions o{};
+    o.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
+    uint32_t wanted = static_cast<uint32_t>(cfg.multiplier - 1);
+    o.numFramesToGenerate = std::max<uint32_t>(1, std::min(wanted, g_framesToGenerateMax ? g_framesToGenerateMax : 1));
+    o.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
+    o.mvecDepthWidth = g_lastSr.renderW;
+    o.mvecDepthHeight = g_lastSr.renderH;
+    sl::Result r;
+    {
+        SlCallScope scope;
+        r = p_slDLSSGSetOptions(sl::ViewportHandle(0), o);
+    }
+    EFG_LOG("frame generation %s (%ux, numFramesToGenerate %u) -> %s", on ? "ON" : "OFF", o.numFramesToGenerate + 1,
+            o.numFramesToGenerate, ResultName(r));
+    if (r == sl::Result::eOk) g_fgOn = on;
 }
 
 // Keeps a hard link to the game's own nvngx_dlss.dll next to the SL plugins (same volume), refreshed
@@ -230,7 +361,8 @@ bool Initialize() {
               GetCore(p_slIsFeatureSupported, "slIsFeatureSupported") &&
               GetCore(p_slGetFeatureRequirements, "slGetFeatureRequirements") &&
               GetCore(p_slGetFeatureFunction, "slGetFeatureFunction") &&
-              GetCore(p_slGetNewFrameToken, "slGetNewFrameToken");
+              GetCore(p_slGetNewFrameToken, "slGetNewFrameToken") &&
+              GetCore(p_slSetTagForFrame, "slSetTagForFrame") && GetCore(p_slSetConstants, "slSetConstants");
     p_slGIPA = reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(g_interposer, "vkGetInstanceProcAddr"));
     p_slGDPA = reinterpret_cast<PFN_vkGetDeviceProcAddr>(GetProcAddress(g_interposer, "vkGetDeviceProcAddr"));
     if (!ok || !p_slGIPA || !p_slGDPA) return false;
@@ -304,6 +436,7 @@ void OnInstanceCreated(VkInstance instance) {
 
 void OnDeviceCreated(VkPhysicalDevice physicalDevice, VkDevice device) {
     if (!g_initialized) return;
+    g_physicalDevice = physicalDevice;
     SlCallScope scope;
     auto get = [&](const char* n) { return p_slGDPA(device, n); };
     g_proxies.createSwapchain = reinterpret_cast<PFN_vkCreateSwapchainKHR>(get("vkCreateSwapchainKHR"));
@@ -350,6 +483,8 @@ void OnDeviceCreated(VkPhysicalDevice physicalDevice, VkDevice device) {
 
 void OnDeviceDestroying(VkDevice device) {
     if (!g_initialized || device != g_device.load()) return;
+    SetFrameGeneration(false);
+    g_mvConverter.Shutdown();
     g_device.store(VK_NULL_HANDLE);
     SlCallScope scope;
     EFG_LOG("slShutdown -> %s", ResultName(p_slShutdown()));
@@ -370,17 +505,92 @@ void OnAcquire() {
     }
 }
 
+void OnSrEvaluate(const SrInputs& in) {
+    if (!g_initialized || !g_device.load() || !p_slSetTagForFrame || !p_slSetConstants) return;
+    if (!g_frame) BeginFrame();
+    if (!g_frame || g_frameHasSr) return;  // one set of inputs per frame
+    if (!in.depth.image || !in.mvec.image || !in.renderW || !in.renderH) return;
+
+    // Depth and motion vectors are the game's own persistent render-resolution images; they are not
+    // rewritten before this frame's present, so SL may read them in place at present time.
+    // Streamline cannot describe R16G16_SNORM, so those motion vectors are first copied into RG16F.
+    ImageRef mvecImage = in.mvec;
+    VkImageLayout mvecLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    if (render::MvConverter::NeedsConversion(in.mvec.format)) {
+        if (!g_mvConverterTried) {
+            g_mvConverterTried = true;
+            if (!g_mvConverter.Init(g_instance, g_physicalDevice, g_device.load())) {
+                EFG_LOG("motion-vector converter unavailable - tagging the game's SNORM motion vectors directly");
+            }
+        }
+        ImageRef converted = g_mvConverter.Convert(in.cmd, in.mvec);
+        if (converted.image) {
+            mvecImage = converted;
+            mvecLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+    }
+    sl::Resource depth = MakeResource(in.depth);
+    sl::Resource mvec = MakeResource(mvecImage, mvecLayout);
+    mvec.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    sl::Extent extent{0, 0, in.renderW, in.renderH};
+    sl::ResourceTag tags[] = {
+        sl::ResourceTag(&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &extent),
+        sl::ResourceTag(&mvec, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extent),
+    };
+
+    sl::Constants c{};
+    FillApproximateCamera(c, in);
+    c.jitterOffset = sl::float2(in.jitterX, in.jitterY);
+    // NGX MV scale converts the stored vectors to pixels; SL wants them normalized to [-1,1].
+    c.mvecScale = sl::float2(in.mvScaleX / float(in.renderW), in.mvScaleY / float(in.renderH));
+    c.depthInverted = B(in.depthInverted);
+    c.cameraMotionIncluded = sl::Boolean::eTrue;
+    c.motionVectors3D = sl::Boolean::eFalse;
+    c.reset = B(in.reset);
+    c.orthographicProjection = sl::Boolean::eFalse;
+    c.motionVectorsDilated = sl::Boolean::eFalse;
+    c.motionVectorsJittered = B(in.mvJittered);
+
+    sl::Result rt, rc;
+    {
+        SlCallScope scope;
+        rt = p_slSetTagForFrame(*g_frame, sl::ViewportHandle(0), tags, 2, reinterpret_cast<sl::CommandBuffer*>(in.cmd));
+        rc = p_slSetConstants(c, *g_frame, sl::ViewportHandle(0));
+    }
+    static int logBudget = 3;
+    if (logBudget > 0 || rt != sl::Result::eOk || rc != sl::Result::eOk) {
+        if (logBudget > 0) --logBudget;
+        EFG_LOG("frame %u: tagged depth %p (fmt %d) + mvec %p (fmt %d) %ux%u -> %s; constants jitter (%.3f, %.3f) "
+                "mvecScale (%.3f, %.3f) depthInverted %d reset %d -> %s",
+                (uint32_t)*g_frame, (void*)in.depth.image, in.depth.format, (void*)mvecImage.image, mvecImage.format,
+                in.renderW, in.renderH, ResultName(rt), in.jitterX, in.jitterY, c.mvecScale.x, c.mvecScale.y,
+                in.depthInverted, in.reset, ResultName(rc));
+    }
+    g_lastSr = in;
+    g_frameHasSr = (rt == sl::Result::eOk && rc == sl::Result::eOk);
+}
+
 void BeforePresent() {
     if (!g_frame) BeginFrame();
     if (!g_simEnded) OnAcquire();
+
+    // Frame generation only while the 3D world renders (frames with DLSS-SR inputs); menus,
+    // loading screens etc. have no evaluate, so FG is switched off and the tags are cleared.
+    const int streak = g_frameHasSr ? g_srStreak + 1 : 0;
+    const bool wantFg = LoadConfig().multiplier >= 2 && g_frameHasSr && streak >= kStreakToEnable;
+    if (!g_frameHasSr) TagNull();
+    SetFrameGeneration(wantFg);
+
     Marker(sl::PCLMarker::eRenderSubmitEnd);
     Marker(sl::PCLMarker::ePresentStart);
 }
 
 void AfterPresent(unsigned long long presentCount) {
     Marker(sl::PCLMarker::ePresentEnd);
+    g_srStreak = g_frameHasSr ? g_srStreak + 1 : 0;
+    g_frameHasSr = false;
     if (presentCount == 2 || presentCount % 600 == 0) {
-        LogDlssgState(presentCount == 2 ? "first frames" : "periodic");
+        LogDlssgState(presentCount == 2 ? "first frames" : (g_fgOn ? "periodic, FG on" : "periodic, FG off"));
         if (presentCount == 2 || presentCount % 6000 == 0) LogReflexState("periodic");
     }
     BeginFrame();  // next frame's simulation starts now (Reflex sleep happens here)

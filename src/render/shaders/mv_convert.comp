@@ -1,0 +1,20 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+// Copies the game's R16G16_SNORM motion vectors into an RG16F image (a format Streamline can describe).
+// Values are unchanged: SNORM reads as float in [-1, 1].
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform texture2D srcMotionVectors;
+layout(set = 0, binding = 1, rg16f) uniform writeonly image2D dstMotionVectors;
+
+layout(push_constant) uniform Params {
+    ivec2 size;
+} params;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= params.size.x || p.y >= params.size.y) return;
+    imageStore(dstMotionVectors, p, vec4(texelFetch(srcMotionVectors, p, 0).xy, 0.0, 0.0));
+}

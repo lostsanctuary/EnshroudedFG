@@ -165,6 +165,26 @@ Runtime files: `winmm.dll` and `EnshroudedFG.ini` go next to the exe. The SL DLL
 - **Turn it on:** `slDLSSGSetOptions(mode = eOn, numFramesToGenerate = 1)`.
 - **Done when:** output FPS is about 2× base, nothing is pink, and status is `eOk`.
 
+**Phase 4 status (2026-10-17): ✅ done (v0.4.2), 2x frame generation working in-game.**
+
+**User impression:** clearly smoother, no visible artifacts, latency slightly floaty.
+
+**How it works**
+- **Tags and constants:** at the game's DLSS-SR evaluate, depth and motion vectors are tagged `eValidUntilPresent` with extent 1280×720, and `slSetConstants` is called once per frame. The camera is approximated (60° vertical FOV, reverse-Z, identity clip-to-prev-clip, camera motion included in the MVs); `mvecScale` is the NGX MV scale divided by render size, which comes out as (1,1).
+- **When FG runs:** it switches on after 3 consecutive frames with SR inputs, and off with null tags on frames without them (menus, loading). `eRetainResourcesWhenOff` is set.
+- **Motion vector conversion:** SL's Vulkan format table has no `R16G16_SNORM`, which caused 8 "undefined format" errors per frame. A compute pass (`src/render/mv_convert.*` plus the embedded SPIR-V shader `mv_convert.comp`) now copies the MVs into one of two ping-pong RG16F images right before the DLSS-SR evaluate, and that copy is what gets tagged.
+- **Log flood guard:** repeated SL warnings and errors are logged 3 times, then only counted.
+- **Settings:** `EnshroudedFG.ini` holds `[FrameGen] Multiplier` (1–6) and `[Camera]` FOV/near/far.
+
+**Bugs fixed**
+- NGX handle ids are only unique per NGX context. SL's DLSS-G feature also got id 1 and replaced the game's SR entry, so FG switched itself off. Features are now keyed by handle pointer, and NGX calls from SL modules are ignored.
+- The game switched its DLSS setting to FSR3 once, after the broken v0.3.1 run (see Phase 3).
+
+**Measurements and open points**
+- Base fps went from ~147 to ~119 with FG on, so output is ~238 fps at 2x. The cost is ~1.6 ms per real frame.
+- SL warns "VSync interval 1 not supported with FG, clamping to 1", because the game creates a FIFO swapchain. Revisit in Phase 7 (option to force IMMEDIATE/MAILBOX while FG is on).
+- Quick 3x–6x tests are already possible by setting `Multiplier` in the ini.
+
 ### Phase 5: MFG selector and ImGui overlay
 - **Overlay:**
   - Toggled with the Insert key (configurable). ImGui uses the Win32 and Vulkan backends on SL's swapchain images.
