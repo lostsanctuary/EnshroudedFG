@@ -11,16 +11,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_subdirectory(external/minhook EXCLUDE_FROM_ALL)
+find_package(Vulkan REQUIRED)  # headers only; vulkan-1 is resolved at runtime
 
 add_library(EnshroudedFG SHARED
     src/dllmain.cpp
     src/core/log.cpp
+    src/hooks/loader_hooks.cpp
+    src/hooks/vulkan_hooks.cpp
+    src/hooks/ngx_hooks.cpp
     src/proxy/winmm_proxy.cpp
     src/proxy/generated/winmm_stubs.asm
     src/proxy/generated/winmm.def
 )
 set_target_properties(EnshroudedFG PROPERTIES OUTPUT_NAME winmm)
-target_include_directories(EnshroudedFG PRIVATE src)
+target_include_directories(EnshroudedFG PRIVATE src external/ngx/include)
 target_compile_definitions(EnshroudedFG PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_options(EnshroudedFG PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8>)
-target_link_libraries(EnshroudedFG PRIVATE minhook)
+target_link_libraries(EnshroudedFG PRIVATE minhook Vulkan::Headers)

@@ -3,6 +3,7 @@
 #include <string>
 
 #include "core/log.h"
+#include "hooks/hooks.h"
 #include "version.h"
 
 namespace efg {
@@ -12,8 +13,6 @@ size_t RealWinmmExportCount();
 
 namespace {
 
-bool g_realWinmmLoaded = false;
-
 bool IsEnshroudedHost() {
     wchar_t path[MAX_PATH * 2]{};
     GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
@@ -22,23 +21,17 @@ bool IsEnshroudedHost() {
     return _wcsicmp(name, L"enshrouded.exe") == 0;
 }
 
-// Runs outside the loader lock. Later phases install hooks here.
-DWORD WINAPI DeferredInit(LPVOID) {
-    efg::LogInit();
+void LogStartup(bool realWinmmLoaded) {
     EFG_LOG("EnshroudedFG %s loaded (proxy winmm.dll)", EFG_VERSION_STRING);
-    EFG_LOG("system winmm.dll %s, %zu exports forwarded",
-            g_realWinmmLoaded ? "loaded" : "FAILED TO LOAD", efg::RealWinmmExportCount());
+    EFG_LOG("system winmm.dll %s, %zu exports forwarded", realWinmmLoaded ? "loaded" : "FAILED TO LOAD",
+            efg::RealWinmmExportCount());
     EFG_LOG("game dir: %ls", efg::GameDir().c_str());
 
     HMODULE exe = GetModuleHandleW(nullptr);
     auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(exe);
     auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(reinterpret_cast<BYTE*>(exe) + dos->e_lfanew);
-    EFG_LOG("enshrouded.exe base %p, image size 0x%lx, timestamp 0x%08lx", exe,
-            nt->OptionalHeader.SizeOfImage, nt->FileHeader.TimeDateStamp);
-    EFG_LOG("vulkan-1.dll %s, _nvngx.dll %s",
-            GetModuleHandleW(L"vulkan-1.dll") ? "already loaded" : "not loaded yet",
-            GetModuleHandleW(L"_nvngx.dll") ? "already loaded" : "not loaded yet");
-    return 0;
+    EFG_LOG("enshrouded.exe base %p, image size 0x%lx, timestamp 0x%08lx", exe, nt->OptionalHeader.SizeOfImage,
+            nt->FileHeader.TimeDateStamp);
 }
 
 }  // namespace
@@ -47,9 +40,12 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
         // Forwarding must work before anything else runs, so load the real DLL right away.
-        g_realWinmmLoaded = efg::LoadRealWinmm();
+        bool realWinmmLoaded = efg::LoadRealWinmm();
         if (IsEnshroudedHost()) {
-            if (HANDLE t = CreateThread(nullptr, 0, DeferredInit, nullptr, 0, nullptr)) CloseHandle(t);
+            efg::LogInit();
+            LogStartup(realWinmmLoaded);
+            // Installed synchronously so the game can't load vulkan-1 / _nvngx before we watch for them.
+            efg::InstallLoaderHooks();
         }
     }
     return TRUE;

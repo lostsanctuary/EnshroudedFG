@@ -76,6 +76,38 @@ Runtime files: `winmm.dll` and `EnshroudedFG.ini` go next to the exe. The SL DLL
 - **Vulkan hooks:** hook `vkCreateInstance` and `vkCreateDevice` in vulkan-1, and wrap `vkGetDeviceProcAddr` so we can intercept device functions. Log the swapchain format and size.
 - **Done when:** the log shows sensible per-frame inputs, and an "Off" frame has no evaluate call (menus and loading screens), which tells us when to pause FG.
 
+**Phase 2 status (2026-10-17): ✅ done.** Findings from the logs (v0.2.2):
+
+**How the game reaches Vulkan**
+- Startup: the game loads `vulkan-1`, makes a throwaway 0-extension instance to probe devices, then **frees and reloads `vulkan-1`**. We pin `vulkan-1` and `_nvngx` so the hooks survive the reload.
+- Core functions (`vkCreateInstance`, `vkCreateDevice` and the swapchain/present functions) are resolved with `GetProcAddress` on the `vulkan-1` exports. Everything else goes through `vkGet{Instance,Device}ProcAddr`, which we hook too. Note that `kernel32!GetProcAddress` goes through `KernelBase!GetProcAddressForCaller`.
+- Instance: API 1.2, 6 extensions (surface, win32_surface, swapchain_colorspace, get_surface_capabilities2, surface_maintenance1, gpdp2).
+
+**Device**
+- 1 queue each in families 0 (graphics), 1 (transfer) and 2 (compute). The families support 16/2/8 queues, so there is plenty of room for SL's queues.
+- 20 extensions. **`VK_NV_low_latency2` and `present_id` are not among them.** NvAPI `QueryInterface` is only called by NGX and driver modules, never by the exe.
+- **So the game's Reflex is not a Vulkan Reflex integration we can translate.** Phase 3 must enable `VK_NV_low_latency2` itself and generate PCL markers around acquire, submit and present.
+
+**Swapchain and present**
+- Swapchain: 1920×1080, `R8G8B8A8_UNORM` (37), sRGB colour space, 3 images, usage SAMPLED|STORAGE|COLOR_ATTACHMENT.
+- The game requests **FIFO** even with in-game vsync off (the menu ran at 700 fps, so a driver override is probably in place). Phase 3 must switch the present mode to IMMEDIATE/MAILBOX while FG is on.
+- One `vkQueuePresentKHR` per frame, on one queue, with 1 wait semaphore and no pNext.
+
+**DLSS SR**
+- SR is created once on entering the world: render 1280×720 → 1920×1080, flags HDR | MVLowRes | DepthInverted, so the MVs are not jittered and depth is reverse-Z.
+- Inputs:
+
+  | Input | Format | Notes |
+  |---|---|---|
+  | Color | RGBA16F (97) | HDR, before tonemapping |
+  | Depth | R32F (100) | the very first frame used D32 (126) |
+  | Motion vectors | RG16 SNORM (78) | MV scale (1280, 720), so they're in UV space and **SL `mvecScale` = (1,1)** |
+
+- Jitter is in pixels, roughly ±0.5 in a repeating sequence. Reset is never set.
+- **The same depth and MV images are used every frame.** There is no ping-pong, so they must be copied, or tagged `eOnlyValidNow`.
+- **There is one SR evaluate per world frame.** The main menu has **no evaluate** at ~600–700 fps, so a frame without an evaluate is the "pause FG" signal. The map screen still evaluates. The world runs at ~155 fps on the RTX 5090 at DLSS Quality 1080p.
+- Everything runs on one thread, including render submission.
+
 ### Phase 3: Streamline bring-up (FG still off)
 - **`slInit`:**
   - `renderAPI = eVulkan`

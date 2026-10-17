@@ -1,0 +1,2 @@
+NGX SDK headers vendored from https://github.com/NVIDIA/DLSS (include/ only)
+commit 9981c63 "DLSS 310.9.16 SDK" (2026-10-16)
