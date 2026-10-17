@@ -21,3 +21,14 @@ if (Test-Path $target) {
 New-Item -ItemType Directory -Force (Join-Path $GameDir "EnshroudedFG") | Out-Null
 Copy-Item $dll $target -Force
 Write-Host "Installed $dll -> $target"
+
+# Streamline production DLLs (DLSS-G, Reflex, PCL) go in EnshroudedFG\streamline
+$slSrc = Join-Path $root "external\streamline\bin\x64"
+$slDst = Join-Path $GameDir "EnshroudedFG\streamline"
+if (Test-Path (Join-Path $slSrc "sl.interposer.dll")) {
+    New-Item -ItemType Directory -Force $slDst | Out-Null
+    Copy-Item (Join-Path $slSrc "*") $slDst -Force
+    Write-Host "Installed Streamline DLLs -> $slDst"
+} else {
+    Write-Warning "Streamline DLLs not found in $slSrc - the mod will run without frame generation"
+}

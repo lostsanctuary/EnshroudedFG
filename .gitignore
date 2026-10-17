@@ -2,3 +2,4 @@
 /backup/
 *.user
 .vs/
+/external/streamline/bin/

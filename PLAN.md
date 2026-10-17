@@ -129,6 +129,26 @@ Runtime files: `winmm.dll` and `EnshroudedFG.ini` go next to the exe. The SL DLL
 
 - **Done when:** the game runs normally through SL and `slDLSSGGetState` reports `eOk` with `numFramesToGenerateMax == 5`.
 
+**Phase 3 status (2026-10-17): ✅ done (v0.3.3).**
+
+**Result**
+- The real instance, device, surface and swapchain/present go through SL's proxies. Manual-hooking mode is used, with SL's own `vkCreateInstance`/`vkCreateDevice` proxies.
+- `slInit`, all three `slIsFeatureSupported` calls and Reflex options return `eOk`.
+- DLSS-G status is `eOk` with **`numFramesToGenerateMax 5`**, so 6x is available. `bIsVsyncSupportAvailable` is 1 and Dynamic MFG is 0, as expected on Vulkan.
+- DLSS-SR still works and its inputs are captured every world frame.
+- Overhead is about 5% (147 vs 155 fps in the world), with clean shutdown via `slShutdown`.
+
+**Pitfalls fixed along the way**
+- **Device creation crash:** SL's `vkCreateDevice` proxy looks the instance up in a physical-device map that only SL's `vkEnumeratePhysicalDevices` proxy fills. We now call that proxy just before creating the device.
+- **Driver plugins:** the driver/NVIDIA App ships **OTA SL plugins** (`ProgramData\NVIDIA\NGX\models\sl_*_override_0\…\*.dll`, same 2.14.16 build) and SL prefers them. They are now registered as internal modules for the re-entry checks.
+- **DLSS reported unavailable:** SL initializes NGX first, using its plugin paths as the NGX feature search paths. The game's DLSS-SR then reported "not available", **and the game silently switched the saved setting to FSR3 with automatic render scale**; I restored the user's settings. Fix: the game folder is added to `pathsToPlugins`, and the game's `nvngx_dlss.dll` is hard-linked into `EnshroudedFG\streamline`, refreshed whenever it changes.
+- **Init detour crash:** a pass-through detour must declare *at least* as many arguments as the hooked function. `NVSDK_NGX_VULKAN_Init_ProjectID_Ext` takes 11.
+
+**DLSS-G requirements we must honour in Phase 4**
+- VSync off (`eVSyncOffRequired`) and HWS on.
+- Queues: 2 compute, 1 graphics, 1 optical-flow. SL adds them itself.
+- SL's swapchain proxy raised `minImages` from 3 to 6 and chains `VkSwapchainLatencyCreateInfoNV`.
+
 ### Phase 4: First generated frames (2x)
 - **Each frame:**
   - Tag depth and motion vectors with `slSetTagForFrame` (viewport 0).

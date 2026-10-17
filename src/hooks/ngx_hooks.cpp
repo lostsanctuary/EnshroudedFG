@@ -9,7 +9,10 @@
 
 #include <windows.h>
 
+#include <intrin.h>
+
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <unordered_map>
 
@@ -26,6 +29,14 @@ using CreateFeature1_t = NVSDK_NGX_Result(NVSDK_CONV*)(VkDevice, VkCommandBuffer
 using EvaluateFeature_t = NVSDK_NGX_Result(NVSDK_CONV*)(VkCommandBuffer, const NVSDK_NGX_Handle*,
                                                         const NVSDK_NGX_Parameter*, PFN_NVSDK_NGX_ProgressCallback);
 using ReleaseFeature_t = NVSDK_NGX_Result(NVSDK_CONV*)(NVSDK_NGX_Handle*);
+
+// The Init* exports differ in arity (Init_ProjectID_Ext takes 11 arguments). A pass-through detour
+// that declares MORE arguments than any variant is safe on x64 - extra slots are forwarded unread -
+// but declaring fewer drops real arguments, so keep a margin. Only argument 1 is interpreted, and only
+// for the appId variants.
+using InitAny_t = NVSDK_NGX_Result(NVSDK_CONV*)(void*, void*, void*, void*, void*, void*, void*, void*, void*, void*,
+                                                void*, void*, void*, void*);
+InitAny_t g_origInit[5] = {};
 
 CreateFeature_t g_origCreateFeature = nullptr;
 CreateFeature1_t g_origCreateFeature1 = nullptr;
@@ -118,6 +129,23 @@ void RecordFeature(const char* api, NVSDK_NGX_Feature feature, const NVSDK_NGX_P
 }
 
 // ---- detours --------------------------------------------------------------------------------
+
+template <int N>
+NVSDK_NGX_Result NVSDK_CONV HookInit(void* a1, void* a2, void* a3, void* a4, void* a5, void* a6, void* a7, void* a8,
+                                     void* a9, void* a10, void* a11, void* a12, void* a13, void* a14) {
+    static const char* kNames[] = {"Init", "Init_Ext", "Init_Ext2", "Init_ProjectID", "Init_ProjectID_Ext"};
+    NVSDK_NGX_Result r = g_origInit[N](a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14);
+    EFG_LOG("NGX VULKAN_%s(caller %p) -> 0x%x", kNames[N], _ReturnAddress(), r);
+    if constexpr (N < 3) {
+        // (appId, dataPath, instance, physicalDevice, device, ...)
+        EFG_LOG("  appId %llu dataPath '%ls' device %p", (unsigned long long)a1, a2 ? (const wchar_t*)a2 : L"", a5);
+    } else {
+        // (projectId, engineType, engineVersion, dataPath, instance, physicalDevice, device, ...)
+        EFG_LOG("  projectId '%s' engine %d dataPath '%ls' device %p", a1 ? (const char*)a1 : "", (int)(uintptr_t)a2,
+                a4 ? (const wchar_t*)a4 : L"", a7);
+    }
+    return r;
+}
 
 NVSDK_NGX_Result NVSDK_CONV HookCreateFeature(VkCommandBuffer cmd, NVSDK_NGX_Feature feature,
                                               NVSDK_NGX_Parameter* p, NVSDK_NGX_Handle** out) {
@@ -229,6 +257,12 @@ void InstallNgxHooks(HMODULE nvngx) {
     GetModuleFileNameW(nvngx, path, MAX_PATH);
     EFG_LOG("_nvngx.dll loaded: %ls", path);
     auto get = [&](const char* n) { return reinterpret_cast<void*>(GetProcAddress(nvngx, n)); };
+    InstallHook(get("NVSDK_NGX_VULKAN_Init"), &HookInit<0>, &g_origInit[0], "NVSDK_NGX_VULKAN_Init");
+    InstallHook(get("NVSDK_NGX_VULKAN_Init_Ext"), &HookInit<1>, &g_origInit[1], "NVSDK_NGX_VULKAN_Init_Ext");
+    InstallHook(get("NVSDK_NGX_VULKAN_Init_Ext2"), &HookInit<2>, &g_origInit[2], "NVSDK_NGX_VULKAN_Init_Ext2");
+    InstallHook(get("NVSDK_NGX_VULKAN_Init_ProjectID"), &HookInit<3>, &g_origInit[3], "NVSDK_NGX_VULKAN_Init_ProjectID");
+    InstallHook(get("NVSDK_NGX_VULKAN_Init_ProjectID_Ext"), &HookInit<4>, &g_origInit[4],
+                "NVSDK_NGX_VULKAN_Init_ProjectID_Ext");
     InstallHook(get("NVSDK_NGX_VULKAN_CreateFeature"), &HookCreateFeature, &g_origCreateFeature,
                 "NVSDK_NGX_VULKAN_CreateFeature");
     InstallHook(get("NVSDK_NGX_VULKAN_CreateFeature1"), &HookCreateFeature1, &g_origCreateFeature1,

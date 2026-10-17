@@ -16,6 +16,8 @@ find_package(Vulkan REQUIRED)  # headers only; vulkan-1 is resolved at runtime
 add_library(EnshroudedFG SHARED
     src/dllmain.cpp
     src/core/log.cpp
+    src/core/module_ranges.cpp
+    src/sl/sl_bridge.cpp
     src/hooks/loader_hooks.cpp
     src/hooks/vulkan_hooks.cpp
     src/hooks/ngx_hooks.cpp
@@ -24,7 +26,7 @@ add_library(EnshroudedFG SHARED
     src/proxy/generated/winmm.def
 )
 set_target_properties(EnshroudedFG PROPERTIES OUTPUT_NAME winmm)
-target_include_directories(EnshroudedFG PRIVATE src external/ngx/include)
+target_include_directories(EnshroudedFG PRIVATE src external/ngx/include external/streamline/include)
 target_compile_definitions(EnshroudedFG PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_options(EnshroudedFG PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8>)
-target_link_libraries(EnshroudedFG PRIVATE minhook Vulkan::Headers)
+target_link_libraries(EnshroudedFG PRIVATE minhook Vulkan::Headers wintrust crypt32)

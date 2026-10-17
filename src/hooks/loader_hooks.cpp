@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 
+#include "core/module_ranges.h"
 #include "hooks/hook_util.h"
 #include "hooks/hooks.h"
 
@@ -58,6 +59,10 @@ HMODULE WINAPI DetourLoadLibraryExW(LPCWSTR name, HANDLE file, DWORD flags) {
     HMODULE result = g_origLoadLibraryExW(name, file, flags);
     if (result && !(flags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE |
                              LOAD_LIBRARY_AS_IMAGE_RESOURCE))) {
+        wchar_t path[MAX_PATH]{};
+        if (GetModuleFileNameW(result, path, MAX_PATH) && IsStreamlineModuleName(path)) {
+            RegisterInternalModule(result, path);
+        }
         CheckModules();
     }
     return result;

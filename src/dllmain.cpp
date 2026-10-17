@@ -3,6 +3,7 @@
 #include <string>
 
 #include "core/log.h"
+#include "core/module_ranges.h"
 #include "hooks/hooks.h"
 #include "version.h"
 
@@ -44,6 +45,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
         if (IsEnshroudedHost()) {
             efg::LogInit();
             LogStartup(realWinmmLoaded);
+            efg::RegisterInternalModule(instance, L"EnshroudedFG (winmm.dll proxy)");
             // Installed synchronously so the game can't load vulkan-1 / _nvngx before we watch for them.
             efg::InstallLoaderHooks();
         }

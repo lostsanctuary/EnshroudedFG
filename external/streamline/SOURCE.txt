@@ -1,0 +1,2 @@
+Streamline SDK v2.14.16 (github.com/NVIDIA-RTX/Streamline release, 2026-10-16)
+include/ is vendored; bin/x64 holds the production signed DLLs (not committed, see .gitignore)
