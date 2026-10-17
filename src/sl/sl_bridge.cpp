@@ -102,8 +102,14 @@ uint32_t g_autoFromMultiplier = 0; // multiplier before the last change, to meas
 double g_autoFromFps = 0;          // rendered fps before the last change
 uint32_t g_autoCeiling = 0;        // after a step down, the multipliers above stay blocked ...
 double g_autoCeilingUntil = 0;     // ... until this time
+bool g_autoFromCapped = false;     // that change happened with the output cap on (no keep learning)
+uint32_t g_autoProbeFrom = 0;      // output cap: multiplier a probe stepped down from, until the lower
+                                   // one reaches the cap (0 = no unconfirmed probe)
+double g_autoProbeAfter = 0;       // output cap: no probe before this time
+double g_autoProbeWaitS = 20.0;    // output cap: wait after a step up / failed probe (doubles on failure)
 constexpr double kAutoIntervalS = 2.0;
 constexpr double kAutoHoldS = 10.0;
+constexpr double kAutoProbeMinS = 20.0, kAutoProbeMaxS = 160.0;
 
 const char* ResultName(sl::Result r) {
     switch (r) {
@@ -524,6 +530,11 @@ uint32_t WantedMultiplier() {
 // frame ([FrameGen] AutoKeep: 0.95 at first, refined from Auto's own steps and saved back). Down when
 // the output is more than 5% above the target; up only while the higher multiplier is predicted to
 // stay below it. After a step down, the multipliers above stay blocked for 10 s so it cannot flip-flop.
+// With the output cap on, the output can never rise above the cap, so "too high" never shows and the
+// rendered fps reveals no headroom. Auto then aims for the fewest generated frames that still reach
+// the cap: while the output sits at the cap it probes one generated frame fewer; if the output then
+// falls clearly below the cap it steps back up and waits before the next probe (20 s, doubling up to
+// 160 s after each failed probe, back to 20 s after one that holds the cap).
 void UpdateAutoMultiplier(double now) {
     if (LoadConfig().multiplier != kMultiplierAuto || !g_fgOn || !g_refreshHz || g_baseFps <= 1) {
         g_autoLastEval = 0;
@@ -548,17 +559,48 @@ void UpdateAutoMultiplier(double now) {
     g_autoLastEval = now;
     g_autoWindowFrames = 0;
     const double target = g_refreshHz * 0.97;
-    if (g_autoFromMultiplier && g_autoFromMultiplier != n && g_autoFromFps > 1) {
+    const double cap = g_outputCapFps;  // > 0 while the output cap limits frame generation
+    const double out = r * n;
+    // Capped rendered fps says nothing about the cost of a generated frame, so learn only uncapped.
+    if (g_autoFromMultiplier && g_autoFromMultiplier != n && g_autoFromFps > 1 && !g_autoFromCapped && cap <= 0) {
         const double observed = std::pow(r / g_autoFromFps, 1.0 / (double(n) - double(g_autoFromMultiplier)));
         g_autoKeep = std::clamp(0.5 * g_autoKeep + 0.5 * observed, 0.85, 1.0);
         SetAutoKeep(static_cast<float>(g_autoKeep));
     }
     g_autoFromMultiplier = 0;
+    // An unconfirmed probe counts only while Auto still runs the multiplier it probed down to.
+    if (cap <= 0 || g_autoProbeFrom != n + 1) g_autoProbeFrom = 0;
+    const bool probing = g_autoProbeFrom != 0;
 
     auto predicted = [&](uint32_t m) { return r * m * std::pow(g_autoKeep, double(m) - double(n)); };
     uint32_t next = n;
     const char* why = "stays";
-    if (r * n > target * 1.05 && n > 2) {
+    if (cap > 0) {
+        const bool atCap = out >= cap * 0.97;
+        if (atCap && probing) {  // the probe reached the cap: confirmed
+            g_autoProbeWaitS = kAutoProbeMinS;
+            g_autoProbeFrom = 0;
+        }
+        if (atCap && n > 2 && now >= g_autoProbeAfter) {
+            next = n - 1;
+            g_autoProbeFrom = n;
+            why = "at the cap, probing one generated frame fewer";
+        } else if (out < cap * 0.93 && n < maxM) {
+            // A probed-down multiplier that never reached the cap is a failed probe, however long it
+            // stayed in the band below the cap first.
+            if (probing) {
+                next = n + 1;
+                why = "below the cap, probe failed";
+            } else {
+                next = n + 1;
+                while (next < maxM && predicted(next) < cap * 0.97) ++next;
+                why = "below the cap";
+            }
+            g_autoProbeAfter = now + g_autoProbeWaitS;
+            if (probing) g_autoProbeWaitS = std::min(g_autoProbeWaitS * 2, kAutoProbeMaxS);
+            g_autoProbeFrom = 0;
+        }
+    } else if (out > target * 1.05 && n > 2) {
         next = 2;
         for (uint32_t m = n - 1; m > 2; --m) {
             if (predicted(m) <= target) {
@@ -575,12 +617,14 @@ void UpdateAutoMultiplier(double now) {
         if (next != n) why = "room for more";
     }
     if (next != n || LoadConfig().verboseLog) {
-        EFG_LOG("auto: rendered %.1f fps x%u = %.0f fps output, target %.0f (%u Hz), keep %.2f/step -> %ux (%s)", r,
-                n, r * n, target, g_refreshHz, g_autoKeep, next, why);
+        EFG_LOG("auto: rendered %.1f fps x%u = %.0f fps output, target %.0f (%u Hz), cap %.0f, keep %.2f/step -> %ux "
+                "(%s)",
+                r, n, out, target, g_refreshHz, cap, g_autoKeep, next, why);
     }
     if (next != n) {
         g_autoFromMultiplier = n;
         g_autoFromFps = r;
+        g_autoFromCapped = cap > 0;
         g_autoMultiplier = next;
     }
 }

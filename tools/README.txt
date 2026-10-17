@@ -36,6 +36,10 @@ In-game menu (Insert)
   down when the output is more than 5% above that, and up only when the next multiplier is expected
   to stay below it (it learns how much each extra generated frame costs in rendered fps). The button
   shows the current choice, e.g. "Auto (3x)"; changes are written to EnshroudedFG\log.txt ("auto: ...").
+  With the output cap on, Auto instead looks for the fewest generated frames that still reach the
+  cap (the cap stops any overshoot): while the output sits at the cap it tries one generated frame
+  fewer, and if the output drops clearly below the cap before that lower multiplier has reached it,
+  it goes back up and waits before trying again (20 s, doubling up to 160 s after repeated misses).
 - Output cap (default Off): Auto keeps the displayed frame rate 3% below your monitor's refresh rate
   using the Reflex frame limiter. Rendering then runs at cap / multiplier, so at high multipliers it
   feels laggier. Usually better: choose the multiplier whose output just reaches your refresh rate
