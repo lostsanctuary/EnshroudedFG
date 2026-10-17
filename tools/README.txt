@@ -45,6 +45,8 @@ In-game menu (Insert)
   feels laggier. Usually better: choose the multiplier whose output just reaches your refresh rate
   (the menu shows a tip), e.g. 2x when you render ~140 fps on a 280 Hz display.
 - Use game camera data: on by default; off uses an approximate camera (for comparison only).
+- Corner readout (default off): a small line in the top-right corner while the menu is closed,
+  showing the multiplier (e.g. "FG Auto 3x"), rendered fps and output fps.
 Frame generation pauses while the menu is open. All choices are saved to EnshroudedFG.ini.
 
 EnshroudedFG.ini (next to enshrouded.exe)
@@ -55,6 +57,7 @@ EnshroudedFG.ini (next to enshrouded.exe)
 [FrameGen] OutputCap    off | auto | <fps>
 [Display]  PresentMode  game | immediate | mailbox | fifo   (applies after restarting the game)
 [Overlay]  ToggleKey    virtual-key code, default 0x2D (Insert)
+[Overlay]  Readout      0 | 1   corner readout (multiplier, rendered fps, output fps)
 [Camera]   Source       game | approx
 [Debug]    VerboseLog / FrameTrace   diagnostics only (FrameTrace: F11 writes EnshroudedFG\frame_trace.txt)
 

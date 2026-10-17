@@ -21,6 +21,8 @@ struct Config {
     int presentModeOverride = 0;
     // [Overlay] ToggleKey: virtual-key code that opens/closes the menu (default: Insert).
     int overlayKey = 0x2D;
+    // [Overlay] Readout: small always-on corner readout (multiplier, rendered and output fps).
+    bool readout = false;
     // [Camera] Source: game = the game's camera read from memory; approx = approximate camera.
     bool useGameCamera = true;
     // [Camera] fallback projection for the approximate camera.
@@ -40,6 +42,7 @@ inline bool FrameGenEnabled(const Config& c) { return c.multiplier != 1; }
 void SetMultiplier(int multiplier);  // 1..6 or kMultiplierAuto
 void SetUseGameCamera(bool use);
 void SetOutputCap(int cap);  // 0 = off, -1 = auto, otherwise fps
-void SetAutoKeep(float keep);  // saved only when the rounded value changes
+void SetAutoKeep(float keep);
+void SetReadout(bool on);  // saved only when the rounded value changes
 
 }  // namespace efg

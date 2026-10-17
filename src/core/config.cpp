@@ -117,6 +117,7 @@ Config& Mutable() {
         c.outputCap = ParseCap(ReadOrDefault(L"FrameGen", L"OutputCap", L"off"));
         c.presentModeOverride = ParsePresentMode(ReadOrDefault(L"Display", L"PresentMode", L"game"));
         c.overlayKey = ToInt(ReadOrDefault(L"Overlay", L"ToggleKey", L"0x2D"), 0x2D);
+        c.readout = ToInt(ReadOrDefault(L"Overlay", L"Readout", L"0"), 0) != 0;
         c.useGameCamera = _wcsicmp(ReadOrDefault(L"Camera", L"Source", L"game").c_str(), L"approx") != 0;
         c.fovYDegrees = ToFloat(ReadOrDefault(L"Camera", L"FovYDegrees", L"60"), 60.0f);
         c.nearPlane = ToFloat(ReadOrDefault(L"Camera", L"Near", L"0.1"), 0.1f);
@@ -155,6 +156,14 @@ void SetAutoKeep(float keep) {
     if (now == old) return;
     Write(L"FrameGen", L"AutoKeep", now);
     EFG_LOG("config: auto keep set to %ls (saved)", now.c_str());
+}
+
+void SetReadout(bool on) {
+    Config& c = Mutable();
+    if (c.readout == on) return;
+    c.readout = on;
+    Write(L"Overlay", L"Readout", on ? L"1" : L"0");
+    EFG_LOG("config: corner readout %s (saved)", on ? "on" : "off");
 }
 
 void SetUseGameCamera(bool use) {

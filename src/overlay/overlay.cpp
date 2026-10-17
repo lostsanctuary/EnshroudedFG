@@ -312,6 +312,11 @@ void DrawMenu() {
     if (ImGui::Checkbox("Use game camera data", &gameCamera)) SetUseGameCamera(gameCamera);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Feed DLSS-G the game's real camera (position, rotation, FOV).\nOff = approximate camera.");
+    bool readout = cfg.readout;
+    if (ImGui::Checkbox("Corner readout", &readout)) SetReadout(readout);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Small always-on readout in the top-right corner while this menu is closed:\n"
+                          "multiplier (Auto's current choice), rendered fps and output fps.");
     ImGui::Spacing();
 
     if (!st.slActive) {
@@ -341,6 +346,31 @@ void DrawMenu() {
 
     ImGui::Separator();
     ImGui::TextDisabled("%s closes this menu. Changes are saved to EnshroudedFG.ini.", KeyName(cfg.overlayKey));
+    ImGui::End();
+}
+
+// Always-on corner readout (menu closed). Drawn onto the final image like the game's HUD, so the
+// HUD-less colour keeps DLSS-G from interpolating it.
+void DrawReadout() {
+    const sl_bridge::FgStatus st = sl_bridge::GetFgStatus();
+    const bool autoMode = LoadConfig().multiplier == kMultiplierAuto;
+    char mode[32];
+    if (!st.slActive)
+        snprintf(mode, sizeof(mode), "FG unavailable");
+    else if (st.multiplier <= 1)
+        snprintf(mode, sizeof(mode), "FG off");
+    else
+        snprintf(mode, sizeof(mode), "FG %s%ux%s", autoMode ? "Auto " : "", st.multiplier, st.fgOn ? "" : " paused");
+    const double output = st.baseFps * (st.fgOn ? st.multiplier : 1);
+
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 12, vp->WorkPos.y + 12), ImGuiCond_Always,
+                            ImVec2(1, 0));
+    ImGui::SetNextWindowBgAlpha(0.45f);
+    ImGui::Begin("##efgreadout", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    ImGui::Text("%s  |  %.0f rendered  |  %.0f output fps", mode, st.baseFps, output);
     ImGui::End();
 }
 
@@ -473,7 +503,8 @@ bool Visible() { return g_visible.load(); }
 HWND Window() { return g_hwnd; }
 
 const VkPresentInfoKHR* BeforePresent(VkQueue queue, const VkPresentInfoKHR* info, VkPresentInfoKHR& storage) {
-    if (!g_visible.load() || !g_vkReady || !g_imguiContext || !info || info->swapchainCount != 1 ||
+    const bool menu = g_visible.load();
+    if (!(menu || LoadConfig().readout) || !g_vkReady || !g_imguiContext || !info || info->swapchainCount != 1 ||
         info->pSwapchains[0] != g_swapchain) {
         return info;
     }
@@ -487,7 +518,10 @@ const VkPresentInfoKHR* BeforePresent(VkQueue queue, const VkPresentInfoKHR* inf
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
-    DrawMenu();
+    if (menu)
+        DrawMenu();
+    else
+        DrawReadout();
     ImGui::Render();
     RecordAndSubmit(queue, pi, info);
 
