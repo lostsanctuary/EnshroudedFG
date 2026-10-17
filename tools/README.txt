@@ -46,6 +46,8 @@ Frame generation pauses while the menu is open. All choices are saved to Enshrou
 EnshroudedFG.ini (next to enshrouded.exe)
 ------------------------------------------
 [FrameGen] Multiplier   1 (off) .. 6 | auto
+[FrameGen] AutoKeep     0.85 .. 1.0, default 0.95: share of rendered fps Auto expects to keep per extra
+                        generated frame. Auto updates it as it learns; delete the line to reset it.
 [FrameGen] OutputCap    off | auto | <fps>
 [Display]  PresentMode  game | immediate | mailbox | fifo   (applies after restarting the game)
 [Overlay]  ToggleKey    virtual-key code, default 0x2D (Insert)

@@ -59,6 +59,14 @@ int ParseCap(const std::wstring& s) {
     return v <= 0 ? 0 : Clamp(v, 30, 2000);
 }
 
+float ClampKeep(float k) { return k < 0.85f ? 0.85f : (k > 1.0f ? 1.0f : k); }
+
+std::wstring KeepToString(float k) {
+    wchar_t buf[16];
+    swprintf_s(buf, L"%.3f", k);
+    return buf;
+}
+
 std::wstring MultiplierToString(int m) { return m == kMultiplierAuto ? L"auto" : std::to_wstring(m); }
 
 int ParseMultiplier(const std::wstring& s) {
@@ -105,6 +113,7 @@ Config& Mutable() {
         RemoveStrayLines();
 
         c.multiplier = ParseMultiplier(ReadOrDefault(L"FrameGen", L"Multiplier", L"2"));
+        c.autoKeep = ClampKeep(ToFloat(ReadOrDefault(L"FrameGen", L"AutoKeep", L"0.95"), 0.95f));
         c.outputCap = ParseCap(ReadOrDefault(L"FrameGen", L"OutputCap", L"off"));
         c.presentModeOverride = ParsePresentMode(ReadOrDefault(L"Display", L"PresentMode", L"game"));
         c.overlayKey = ToInt(ReadOrDefault(L"Overlay", L"ToggleKey", L"0x2D"), 0x2D);
@@ -116,8 +125,8 @@ Config& Mutable() {
         ReadOrDefault(L"Debug", L"FrameTrace", L"0");
 
         static const char* kModes[] = {"game", "immediate", "mailbox", "fifo"};
-        EFG_LOG("config: multiplier %ls, output cap %ls, present mode %s, overlay key 0x%02x, camera %s, verbose %d",
-                c.multiplier == kMultiplierAuto ? L"auto" : (std::to_wstring(c.multiplier) + L"x").c_str(),
+        EFG_LOG("config: multiplier %ls (auto keep %.3f), output cap %ls, present mode %s, overlay key 0x%02x, camera %s, verbose %d",
+                c.multiplier == kMultiplierAuto ? L"auto" : (std::to_wstring(c.multiplier) + L"x").c_str(), c.autoKeep,
                 CapToString(c.outputCap).c_str(), kModes[c.presentModeOverride], c.overlayKey,
                 c.useGameCamera ? "game" : "approx", c.verboseLog);
         return c;
@@ -136,6 +145,16 @@ void SetMultiplier(int multiplier) {
     c.multiplier = multiplier;
     Write(L"FrameGen", L"Multiplier", MultiplierToString(multiplier));
     EFG_LOG("config: multiplier set to %ls (saved)", MultiplierToString(multiplier).c_str());
+}
+
+void SetAutoKeep(float keep) {
+    Config& c = Mutable();
+    keep = ClampKeep(keep);
+    const std::wstring old = KeepToString(c.autoKeep), now = KeepToString(keep);
+    c.autoKeep = keep;
+    if (now == old) return;
+    Write(L"FrameGen", L"AutoKeep", now);
+    EFG_LOG("config: auto keep set to %ls (saved)", now.c_str());
 }
 
 void SetUseGameCamera(bool use) {

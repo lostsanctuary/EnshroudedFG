@@ -95,7 +95,7 @@ constexpr int kStreakToEnable = 3;  // world frames required before turning FG o
 
 // Auto multiplier: a hand-rolled dynamic MFG (Streamline's Dynamic MFG is D3D12-only).
 uint32_t g_autoMultiplier = 2;     // multiplier Auto currently runs at (kept across menus/loading)
-double g_autoKeep = 0.9;           // share of rendered fps kept per extra generated frame (learned)
+double g_autoKeep = 0;             // share of rendered fps kept per extra generated frame (0 = from ini)
 double g_autoLastEval = 0;         // time of the last evaluation in s (0 = FG not running under Auto)
 uint32_t g_autoWindowFrames = 0;   // frames presented since then (rendered fps = frames / elapsed)
 uint32_t g_autoFromMultiplier = 0; // multiplier before the last change, to measure its cost (0 = none)
@@ -518,11 +518,12 @@ uint32_t WantedMultiplier() {
 }
 
 // Auto: every 2 s while frame generation runs, pick the multiplier N in [2, max] whose output
-// (rendered fps averaged over those 2 s, x N; a brief dip must not trigger a step) just fills the display (target = refresh x 0.97). The output at another
-// multiplier M is predicted as rendered x M x keep^(M-N), where keep is the share of rendered fps that
-// survives one more generated frame (0.9 to start, then measured from Auto's own steps). Down when the
-// output is more than 5% above the target; up only while the higher multiplier is predicted to stay
-// below it. After a step down, the multipliers above stay blocked for 10 s so it cannot flip-flop.
+// (rendered fps averaged over those 2 s, so a brief dip cannot trigger a step, x N) just fills the
+// display (target = refresh x 0.97). The output at another multiplier M is predicted as
+// rendered x M x keep^(M-N), where keep is the share of rendered fps that survives one more generated
+// frame ([FrameGen] AutoKeep: 0.95 at first, refined from Auto's own steps and saved back). Down when
+// the output is more than 5% above the target; up only while the higher multiplier is predicted to
+// stay below it. After a step down, the multipliers above stay blocked for 10 s so it cannot flip-flop.
 void UpdateAutoMultiplier(double now) {
     if (LoadConfig().multiplier != kMultiplierAuto || !g_fgOn || !g_refreshHz || g_baseFps <= 1) {
         g_autoLastEval = 0;
@@ -543,12 +544,14 @@ void UpdateAutoMultiplier(double now) {
     ++g_autoWindowFrames;
     if (now - g_autoLastEval < kAutoIntervalS) return;
     const double r = g_autoWindowFrames / (now - g_autoLastEval);
+    if (g_autoKeep <= 0) g_autoKeep = LoadConfig().autoKeep;
     g_autoLastEval = now;
     g_autoWindowFrames = 0;
     const double target = g_refreshHz * 0.97;
     if (g_autoFromMultiplier && g_autoFromMultiplier != n && g_autoFromFps > 1) {
         const double observed = std::pow(r / g_autoFromFps, 1.0 / (double(n) - double(g_autoFromMultiplier)));
         g_autoKeep = std::clamp(0.5 * g_autoKeep + 0.5 * observed, 0.85, 1.0);
+        SetAutoKeep(static_cast<float>(g_autoKeep));
     }
     g_autoFromMultiplier = 0;
 
