@@ -1,5 +1,7 @@
 # EnshroudedFG
 
+[![Build](https://github.com/lostsanctuary/EnshroudedFG/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/lostsanctuary/EnshroudedFG/actions/workflows/build.yml)
+
 NVIDIA DLSS Frame Generation and Multi Frame Generation (2x–6x) for **Enshrouded** (Vulkan), switchable in game.
 
 Enshrouded ships DLSS Super Resolution, DLAA and Reflex, but no frame generation. EnshroudedFG adds it through
