@@ -10,6 +10,14 @@ Settings are kept across versions. Unless noted, the defaults stay `Multiplier=2
      and start a new empty [Unreleased] above it: the Release workflow refuses a tag whose version
      has no "## [x.y.z]" section here. -->
 
+These changes are for contributors and maintainers. The mod itself is unchanged since 0.8.4.
+
+### Added
+- **Changelog check:** pull requests that change `src/` must update the `[Unreleased]` section of this file or add a new release section. The `skip-changelog` label skips the check for changes that aren't user-facing. Tagged releases also fail unless `CHANGELOG.md` has an entry for their version.
+- **Branch protection:** `main` only accepts changes through pull requests that pass the `build` and `changelog` checks, for maintainers too. Force-pushes and deleting `main` are blocked.
+- **CODEOWNERS:** @lostsanctuary is the code owner of the whole repository and is asked to review pull requests from other contributors.
+- **Dependabot auto-merge:** Dependabot pull requests that only bump GitHub Actions merge by themselves once `build` and `changelog` pass. Submodule bumps (minhook, imgui) still need a person, because they change the mod and need testing in game.
+
 ## [0.8.4] - 2026-10-18
 
 A maintenance release: frame generation, the menu options and your settings work exactly as in 0.8.3.
