@@ -10,6 +10,8 @@ Settings are kept across versions. Unless noted, the defaults stay `Multiplier=2
      and start a new empty [Unreleased] above it: the Release workflow refuses a tag whose version
      has no "## [x.y.z]" section here. -->
 
+## [0.8.5] - 2026-10-18
+
 ### Changed
 - **Less frame generation overhead:** the game now starts rendering its next frame while DLSS-G is still generating frames, instead of waiting for it. On an RTX 5090, rendered fps rose from 130 to 135 at 2x and from 93 to 115 at 6x, with no change in image quality or latency.
 - **Fallback setting:** `[FrameGen] QueueParallelism = block` restores the previous behaviour if you see artifacts or instability. It applies after restarting the game.
@@ -74,7 +76,8 @@ Also contains the 0.8.2 changes, which had no release of their own.
   - **Logging:** each change is written to `EnshroudedFG\log.txt` (`auto: ...`).
   - **Opt-in:** Auto is not the default.
 
-[Unreleased]: https://github.com/lostsanctuary/EnshroudedFG/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/lostsanctuary/EnshroudedFG/compare/v0.8.5...HEAD
+[0.8.5]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.5
 [0.8.4]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.4
 [0.8.3]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.3
 [0.8.1]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.1
