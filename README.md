@@ -32,7 +32,7 @@ real camera, so generated frames keep the HUD sharp and stable.
 
 To uninstall, delete `winmm.dll`, the `EnshroudedFG` folder and `EnshroudedFG.ini` from the game folder.
 
-Logs are written to `EnshroudedFG\log.txt` and `EnshroudedFG\sl.log`. Please attach both when reporting a problem.
+Logs are written to `EnshroudedFG\log.txt` and `EnshroudedFG\sl.log`. To report a problem, open a [bug report](https://github.com/lostsanctuary/EnshroudedFG/issues/new/choose) and attach both; [CONTRIBUTING.md](CONTRIBUTING.md#reporting-bugs) has the details.
 
 ## Settings (`EnshroudedFG.ini`)
 
@@ -73,6 +73,8 @@ powershell -ExecutionPolicy Bypass -File tools\install.ps1      # finds the game
 - **`fetch_deps.ps1`** downloads the NGX headers from [NVIDIA/DLSS](https://github.com/NVIDIA/DLSS) at a pinned commit, and the production Streamline 2.14.16 DLLs from the [Streamline release](https://github.com/NVIDIA-RTX/Streamline/releases). NVIDIA's licence doesn't allow redistributing those in source form, so they aren't in this repository.
 - **`install.ps1`** and **`uninstall.ps1`** take `-GameDir <folder>` if your game isn't in a Steam library. `uninstall.ps1 -Purge` also removes the `EnshroudedFG` folder.
 - **`package.ps1`** builds the release zip in `dist\`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full build setup, testing in game and pull requests.
 
 ## How it works
 
