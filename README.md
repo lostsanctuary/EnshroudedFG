@@ -93,6 +93,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full build setup, testing in game
 - **Multiplayer:** play solo first; multiplayer use is at your own risk.
 - **Not official:** this is an unofficial mod. It isn't affiliated with or endorsed by NVIDIA or Keen Games.
 
+## Contributing
+
+- **Contributing:** bug reports, ideas and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the build setup, testing and how to report bugs.
+- **Code of Conduct:** everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+- **Security:** please report security problems privately, as described in [SECURITY.md](SECURITY.md), not in public issues.
+
 ## Licence
 
 [MIT](LICENSE). Third-party components and NVIDIA runtime licences are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
