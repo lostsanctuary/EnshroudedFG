@@ -403,7 +403,7 @@ Streamline's Dynamic MFG is D3D12-only (`bIsDynamicMFGSupported` reads 0 here), 
 - The Vulkan SDK setup is shared in `.github/actions/setup-vulkan-sdk`.
 - Dependabot watches the workflow actions and the minhook/imgui submodules.
 
-### Queue parallelism (after v0.8.4, 2026-10-18)
+### v0.8.5: queue parallelism (2026-10-18)
 
 **Why:** almost all of frame generation's cost is DLSS-G itself, not the mod. The mod's own copy passes take well under 0.1 ms. But Streamline's default `eBlockPresentingClientQueue` blocks the game's queue until DLSS-G is done, so the game's next frame and the generated frames ran one after the other.
 
