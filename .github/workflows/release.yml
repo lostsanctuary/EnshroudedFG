@@ -33,6 +33,11 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
 
+      - name: Check CHANGELOG entry
+        if: github.ref_type == 'tag'
+        shell: powershell
+        run: ./tools/check_changelog.ps1 -Version "${{ steps.version.outputs.version }}"
+
       - uses: ./.github/actions/setup-vulkan-sdk
 
       # The Streamline SDK zip is ~265 MB; keep the extracted DLLs between runs.

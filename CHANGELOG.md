@@ -4,6 +4,12 @@ User-facing changes in each release. Downloads are on the [Releases](https://git
 
 Settings are kept across versions. Unless noted, the defaults stay `Multiplier=2`, `OutputCap=off` and `Readout=0`.
 
+## [Unreleased]
+
+<!-- Add changes here as they land. When releasing, rename this section to "## [x.y.z] - YYYY-MM-DD"
+     and start a new empty [Unreleased] above it: the Release workflow refuses a tag whose version
+     has no "## [x.y.z]" section here. -->
+
 ## [0.8.4] - 2026-10-18
 
 A maintenance release: frame generation, the menu options and your settings work exactly as in 0.8.3.
@@ -54,6 +60,7 @@ Also contains the 0.8.2 changes, which had no release of their own.
   - **Logging:** each change is written to `EnshroudedFG\log.txt` (`auto: ...`).
   - **Opt-in:** Auto is not the default.
 
+[Unreleased]: https://github.com/lostsanctuary/EnshroudedFG/compare/v0.8.4...HEAD
 [0.8.4]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.4
 [0.8.3]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.3
 [0.8.1]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.1
