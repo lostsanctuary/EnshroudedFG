@@ -40,6 +40,7 @@ function(efg_shader name array)
 endfunction()
 efg_shader(mv_convert kMvConvertSpv)
 efg_shader(copy_rgba8 kCopyRgba8Spv)
+efg_shader(copy_r32 kCopyR32Spv)
 
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui)
 add_library(imgui STATIC

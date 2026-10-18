@@ -167,6 +167,7 @@ Config& Mutable() {
         c.multiplier = ParseMultiplier(ReadOrDefault(L"FrameGen", L"Multiplier", L"2"));
         c.autoKeep = ClampKeep(ToFloat(ReadOrDefault(L"FrameGen", L"AutoKeep", L"0.95"), 0.95f));
         c.outputCap = ParseCap(ReadOrDefault(L"FrameGen", L"OutputCap", L"off"));
+        c.queueParallel = _wcsicmp(ReadOrDefault(L"FrameGen", L"QueueParallelism", L"parallel").c_str(), L"block") != 0;
         c.reflexMode = ParseReflex(ReadOrDefault(L"Reflex", L"Mode", L"on"));
         c.presentModeOverride = ParsePresentMode(ReadOrDefault(L"Display", L"PresentMode", L"game"));
         c.overlayKey = ToInt(ReadOrDefault(L"Overlay", L"ToggleKey", L"0x2D"), 0x2D);
@@ -185,9 +186,11 @@ Config& Mutable() {
         ReadOrDefault(L"Debug", L"FrameTrace", L"0");
 
         static const char* kModes[] = {"game", "immediate", "mailbox", "fifo"};
-        EFG_LOG("config: multiplier %ls (auto keep %.3f), output cap %ls, present mode %s, overlay key 0x%02x, camera %s, verbose %d",
+        EFG_LOG("config: multiplier %ls (auto keep %.3f), output cap %ls, queue parallelism %s, present mode %s, "
+                "overlay key 0x%02x, camera %s, verbose %d",
                 c.multiplier == kMultiplierAuto ? L"auto" : (std::to_wstring(c.multiplier) + L"x").c_str(), c.autoKeep,
-                CapToString(c.outputCap).c_str(), kModes[c.presentModeOverride], c.overlayKey,
+                CapToString(c.outputCap).c_str(), c.queueParallel ? "parallel" : "block", kModes[c.presentModeOverride],
+                c.overlayKey,
                 c.useGameCamera ? "game" : "approx", c.verboseLog);
         return c;
     }();

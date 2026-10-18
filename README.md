@@ -42,6 +42,7 @@ Logs are written to `EnshroudedFG\log.txt` and `EnshroudedFG\sl.log`. To report 
 |---|---|
 | `[FrameGen] Multiplier` | `1` (off) … `6`, or `auto` |
 | `[FrameGen] OutputCap` | `off`, `auto` (refresh − 3%) or an fps value |
+| `[FrameGen] QueueParallelism` | `parallel` (default) or `block`. `parallel` lets the game render its next frame while DLSS-G still generates frames; `block` is the old behaviour, kept as a fallback. Applies after a restart |
 | `[FrameGen] AutoKeep` | `0.85` … `1.0`. Learned by Auto; delete the line to reset it |
 | `[Reflex] Mode` | `on`, `boost` or `off`. Off only applies while frame generation is off |
 | `[Display] PresentMode` | `game`, `immediate`, `mailbox` or `fifo`. Applies after a restart |

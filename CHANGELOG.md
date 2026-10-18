@@ -10,9 +10,14 @@ Settings are kept across versions. Unless noted, the defaults stay `Multiplier=2
      and start a new empty [Unreleased] above it: the Release workflow refuses a tag whose version
      has no "## [x.y.z]" section here. -->
 
-These changes are for contributors and maintainers. The mod itself is unchanged since 0.8.4.
+### Changed
+- **Less frame generation overhead:** the game now starts rendering its next frame while DLSS-G is still generating frames, instead of waiting for it. On an RTX 5090, rendered fps rose from 130 to 135 at 2x and from 93 to 115 at 6x, with no change in image quality or latency.
+- **Fallback setting:** `[FrameGen] QueueParallelism = block` restores the previous behaviour if you see artifacts or instability. It applies after restarting the game.
 
 ### Added
+
+These are for contributors and maintainers.
+
 - **Changelog check:** pull requests that change `src/` must update the `[Unreleased]` section of this file or add a new release section. The `skip-changelog` label skips the check for changes that aren't user-facing. Tagged releases also fail unless `CHANGELOG.md` has an entry for their version.
 - **Branch protection:** `main` only accepts changes through pull requests that pass the `build` and `changelog` checks, for maintainers too. Force-pushes and deleting `main` are blocked.
 - **CODEOWNERS:** @lostsanctuary is the code owner of the whole repository and is asked to review pull requests from other contributors.

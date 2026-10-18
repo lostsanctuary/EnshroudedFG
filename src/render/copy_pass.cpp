@@ -16,10 +16,12 @@ bool Load(T& out, VkDevice device, const char* name) {
 }  // namespace
 
 bool CopyPass::Init(const char* name, VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device,
-                    VkFormat dstFormat, const uint32_t* spirv, size_t spirvBytes) {
+                    VkFormat dstFormat, const uint32_t* spirv, size_t spirvBytes, uint32_t slots, WaitFn wait) {
     name_ = name;
     device_ = device;
     format_ = dstFormat;
+    slots_ = slots < 2 ? 2 : (slots > kMaxSlots ? kMaxSlots : slots);
+    wait_ = wait;
     auto getMemProps = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
         RealInstanceProc(instance, "vkGetPhysicalDeviceMemoryProperties"));
     PFN_vkCreateShaderModule createShaderModule = nullptr;
@@ -89,14 +91,15 @@ bool CopyPass::Init(const char* name, VkInstance instance, VkPhysicalDevice phys
         return false;
     }
     ready_ = true;
-    EFG_LOG("CopyPass %s ready (-> format %d)", name_, format_);
+    EFG_LOG("CopyPass %s ready (-> format %d, %u slots%s)", name_, format_, slots_, wait_ ? ", fence-guarded" : "");
     return true;
 }
 
 bool CopyPass::EnsureTargets(uint32_t width, uint32_t height) {
     if (width == width_ && height == height_ && targets_[0].image) return true;
     DestroyTargets();
-    for (auto& t : targets_) {
+    for (uint32_t slot = 0; slot < slots_; ++slot) {
+        Target& t = targets_[slot];
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ci.imageType = VK_IMAGE_TYPE_2D;
         ci.format = format_;
@@ -136,7 +139,9 @@ bool CopyPass::EnsureTargets(uint32_t width, uint32_t height) {
     }
     width_ = width;
     height_ = height;
-    EFG_LOG("CopyPass %s: allocated 2x %ux%u targets", name_, width, height);
+    next_ = 0;
+    written_ = -1;
+    EFG_LOG("CopyPass %s: allocated %ux %ux%u targets", name_, slots_, width, height);
     return true;
 }
 
@@ -171,10 +176,16 @@ sl_bridge::ImageRef CopyPass::Copy(VkCommandBuffer cmd, VkImageView srcView, uin
         return {};
     }
     Target& t = targets_[next_];
-    next_ ^= 1;
+    written_ = static_cast<int>(next_);
+    next_ = (next_ + 1) % slots_;
+    // Parallel mode: DLSS-G may still be reading this slot from a few frames ago. The command buffer is
+    // recorded now and submitted later, so a CPU wait here orders the rewrite after DLSS-G's reads. With
+    // 3 slots the fence has normally passed long ago.
+    if (wait_ && t.fenceValue) wait_(t.fenceValue);
+    t.fenceValue = 0;
 
     VkImageMemoryBarrier toWrite{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    toWrite.srcAccessMask = 0;  // earlier DLSS-G reads are ordered by Streamline's queue synchronization
+    toWrite.srcAccessMask = 0;  // earlier DLSS-G reads: Streamline's queue blocking, or the fence wait above
     toWrite.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     toWrite.oldLayout = t.initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
     toWrite.newLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -216,6 +227,12 @@ sl_bridge::ImageRef CopyPass::Copy(VkCommandBuffer cmd, VkImageView srcView, uin
                           0, nullptr, 1, &toRead);
 
     return {t.image, t.view, format_, width, height};
+}
+
+void CopyPass::MarkPresented(uint64_t fenceValue) {
+    if (written_ < 0) return;
+    targets_[written_].fenceValue = fenceValue;
+    written_ = -1;
 }
 
 }  // namespace efg::render

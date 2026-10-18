@@ -1,0 +1,21 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+// Copies the game's depth (D32_SFLOAT or R32_SFLOAT, read through its sampled view) into an R32F image
+// we own, so DLSS-G can keep reading it while the game renders its next frame
+// ([FrameGen] QueueParallelism=parallel).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform texture2D srcDepth;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D dstDepth;
+
+layout(push_constant) uniform Params {
+    ivec2 size;
+} params;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= params.size.x || p.y >= params.size.y) return;
+    imageStore(dstDepth, p, vec4(texelFetch(srcDepth, p, 0).r, 0.0, 0.0, 0.0));
+}

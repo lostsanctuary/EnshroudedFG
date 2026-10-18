@@ -31,6 +31,11 @@ struct Config {
     // [FrameGen] OutputCap: limit on displayed fps while frame generation runs (Reflex frame limiter;
     // rendered fps becomes cap / multiplier). 0 = off, -1 = auto (3% below the monitor refresh rate).
     int outputCap = 0;
+    // [FrameGen] QueueParallelism: parallel (default) | block. "parallel" lets the game render its next
+    // frame while DLSS-G still generates frames (Streamline's eBlockNoClientQueues; inputs are copied into
+    // a 3-slot ring). "block" is Streamline's default mode, kept as a fallback. Read at startup, so a
+    // change applies after restarting the game.
+    bool queueParallel = true;
     // [Display] PresentMode: 0 = as the game requests, otherwise a VkPresentModeKHR + 1
     // (1 = immediate, 2 = mailbox, 3 = fifo / vsync). Applied when the game (re)creates its swapchain.
     int presentModeOverride = 0;
