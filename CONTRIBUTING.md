@@ -99,34 +99,45 @@ Before opening a pull request, please check at least:
 
 ## Making a release
 
-Releases are built by the [Release workflow](.github/workflows/release.yml) when a `v*` tag is pushed. For a release `x.y.z`:
+Releases are built by the [Release workflow](.github/workflows/release.yml) when a `v*` tag is pushed. `main` is protected, for maintainers too: every change reaches it through a pull request that passes the `build` and `changelog` checks, so a release starts on a branch. For a release `x.y.z`:
 
-1. **Bump the version.** Set `EFG_VERSION_STRING` in [`src/version.h`](src/version.h) to `"x.y.z"`. The workflow refuses a tag that doesn't match it.
-2. **Update the changelog.** In [CHANGELOG.md](CHANGELOG.md):
+1. **Start a branch** from the latest `main`:
+   ```powershell
+   git switch main
+   git pull
+   git switch -c release/x.y.z
+   ```
+
+2. **Bump the version.** Set `EFG_VERSION_STRING` in [`src/version.h`](src/version.h) to `"x.y.z"`. The workflow refuses a tag that doesn't match it.
+3. **Update the changelog.** In [CHANGELOG.md](CHANGELOG.md):
    - Rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD`, and add a new, empty `## [Unreleased]` above it.
    - At the bottom, point the `[Unreleased]` link at `compare/vx.y.z...HEAD` and add a `[x.y.z]` link to the release.
    - If the release needs background notes, add an entry to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) too.
-3. **Check the changelog.** The workflow runs this same check and fails if the version has no section or the section is empty:
+4. **Check the changelog.** The workflow runs this same check and fails if the version has no section or the section is empty:
    ```powershell
    powershell -ExecutionPolicy Bypass -File tools\check_changelog.ps1 -Version x.y.z
    ```
-4. **Commit and push `main`**, and wait for the Build workflow to pass.
-5. **Push the tag:**
+5. **Open a pull request and merge it.** Commit, push the branch and open a PR (for example `gh pr create --fill`). Merge it once `build` and `changelog` pass; a new `## [x.y.z]` section satisfies the changelog check.
+6. **Tag the merged commit.** Update your local `main` so the tag points at the commit the merge created, not at your branch:
    ```powershell
+   git switch main
+   git pull
    git tag -a vx.y.z -m "EnshroudedFG vx.y.z"
    git push origin vx.y.z
    ```
    The Release workflow then checks the version and the changelog, fetches the NVIDIA files, builds and runs `tools/package.ps1`. It creates a **draft** release named `EnshroudedFG vx.y.z`, with `EnshroudedFG-x.y.z.zip` attached and generated notes. If a release for that tag already exists, it uploads the zip to that release instead.
-6. **Publish the draft.** On the [Releases](https://github.com/lostsanctuary/EnshroudedFG/releases) page, replace the generated notes with a proper description and publish:
+7. **Publish the draft.** On the [Releases](https://github.com/lostsanctuary/EnshroudedFG/releases) page, replace the generated notes with a proper description and publish:
    - Follow the earlier releases' style: a summary, an install line, the changes, the defaults and the requirements.
    - Retitle it `EnshroudedFG vx.y.z - <short summary>`.
    - Make sure it is marked **Latest**.
 
-If the Release workflow fails, fix the problem on `main`, then delete the tag and push it again:
+If the Release workflow fails, fix the problem in another pull request and merge it. Then delete the tag, pull `main`, tag the new merge commit and push the tag again:
 
 ```powershell
 git tag -d vx.y.z
 git push origin :refs/tags/vx.y.z
 ```
+
+Tags aren't covered by the branch protection, so deleting and pushing a tag works without a pull request.
 
 Delete any draft it left behind before pushing the tag again.
