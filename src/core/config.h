@@ -18,6 +18,9 @@ enum ReadoutItem : unsigned {
 };
 constexpr unsigned kReadoutDefault = kReadoutFg | kReadoutOutput | kReadoutFps | kReadoutLatency;
 
+// Frame counter scale per [Overlay] ReadoutSize (small, medium, large).
+inline float ReadoutScale(int size) { return size <= 0 ? 0.8f : (size >= 2 ? 1.3f : 1.0f); }
+
 struct Config {
     // [FrameGen] Multiplier: 1 = off, 2..6 = DLSS multi frame generation 2x..6x,
     // kMultiplierAuto ("auto") = pick 2x..max at run time so the output just fills the display.
@@ -42,6 +45,8 @@ struct Config {
     // -1 = default (top-right corner).
     // [Overlay] ReadoutItems: comma list of fg, output, fps, latency, frametime, reflex.
     unsigned readoutItems = kReadoutDefault;
+    // [Overlay] ReadoutSize: small | medium | large (0, 1, 2) - scale of the frame counter.
+    int readoutSize = 1;
     int readoutX = -1;
     int readoutY = -1;
     // [Camera] Source: game = the game's camera read from memory; approx = approximate camera.
@@ -66,7 +71,8 @@ void SetOutputCap(int cap);  // 0 = off, -1 = auto, otherwise fps
 void SetReflexMode(int mode);  // 0 = off, 1 = on, 2 = on + boost
 void SetAutoKeep(float keep);
 void SetReadout(bool on);
-void SetReadoutItems(unsigned mask);  // ReadoutItem bits; never empty
+void SetReadoutItems(unsigned mask);
+void SetReadoutSize(int size);  // 0 small, 1 medium, 2 large  // ReadoutItem bits; never empty
 void SetReadoutPos(int x, int y);  // -1, -1 = back to the default corner  // saved only when the rounded value changes
 
 }  // namespace efg

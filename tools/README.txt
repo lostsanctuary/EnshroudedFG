@@ -62,6 +62,7 @@ EnshroudedFG.ini (next to enshrouded.exe)
 [FrameGen] OutputCap    off | auto | <fps>
 [Reflex]   Mode         on | boost | off
 [Overlay]  ReadoutItems fg, output, fps, latency, frametime, reflex (what the counter shows)
+[Overlay]  ReadoutSize  small | medium | large
 [Display]  PresentMode  game | immediate | mailbox | fifo   (applies after restarting the game)
 [Overlay]  ToggleKey    virtual-key code, default 0x2D (Insert)
 [Overlay]  Readout      0 | 1   corner readout (multiplier, rendered fps, output fps)

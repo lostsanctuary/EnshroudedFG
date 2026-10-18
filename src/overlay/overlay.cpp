@@ -374,6 +374,13 @@ void DrawMenu() {
         th::EndDropdown();
     }
 
+    static const char* kSizes[] = {"Small", "Medium", "Large"};
+    if (int d = th::StepperRow("countersize", "Counter Size", kSizes[cfg.readoutSize < 0 || cfg.readoutSize > 2 ? 1 : cfg.readoutSize],
+                               cfg.readoutSize > 0, cfg.readoutSize < 2, row++, "Size of the frame counter.",
+                               cfg.readout)) {
+        SetReadoutSize(cfg.readoutSize + d);
+    }
+
     // ---- Status: the game's big stat numbers ---------------------------------------------------
     ImGui::Dummy(ImVec2(0, th::S(6)));
     th::SectionHeader("Status");
@@ -475,6 +482,9 @@ void DrawReadout(bool movable) {
     const Config& cfg = LoadConfig();
     const sl_bridge::FgStatus st = sl_bridge::GetFgStatus();
     const bool autoMode = cfg.multiplier == kMultiplierAuto;
+    // Everything on the plate scales with [Overlay] ReadoutSize.
+    const float sizeScale = ReadoutScale(cfg.readoutSize);
+    auto Z = [sizeScale](float px) { return theme::S(px * sizeScale); };
 
     // Segments in a fixed order, filtered by [Overlay] ReadoutItems.
     struct Segment {
@@ -540,16 +550,16 @@ void DrawReadout(bool movable) {
     ImFont* capFont = fonts.serif ? fonts.serif : ImGui::GetFont();
     ImFont* valFont = fonts.serifBold ? fonts.serifBold : ImGui::GetFont();
     ImFont* itFont = fonts.serifItalic ? fonts.serifItalic : ImGui::GetFont();
-    const float capSize = th::S(12.5f), valSize = th::S(18.0f), itSize = th::S(14.0f);
-    const float capSpacing = th::S(1.4f);
-    const float pad = th::S(20), gap = th::S(7), sep = th::S(22);
-    const float h = th::S(32);
+    const float capSize = Z(12.5f), valSize = Z(18.0f), itSize = Z(14.0f);
+    const float capSpacing = Z(1.4f);
+    const float pad = Z(20), gap = Z(7), sep = Z(22);
+    const float h = Z(32);
 
     float w = pad * 2;
     for (int i = 0; i < n; ++i) {
         w += th::SpacedTextWidth(capFont, capSize, segs[i].caption, capSpacing) + gap +
              valFont->CalcTextSizeA(valSize, FLT_MAX, 0, segs[i].value).x;
-        if (segs[i].suffix) w += th::S(5) + itFont->CalcTextSizeA(itSize, FLT_MAX, 0, segs[i].suffix).x;
+        if (segs[i].suffix) w += Z(5) + itFont->CalcTextSizeA(itSize, FLT_MAX, 0, segs[i].suffix).x;
         if (i + 1 < n) w += sep;
     }
 
@@ -561,7 +571,7 @@ void DrawReadout(bool movable) {
         const float y = std::min(float(cfg.readoutY), vp->WorkPos.y + vp->WorkSize.y - lastSize.y);
         ImGui::SetNextWindowPos(ImVec2(std::max(x, vp->WorkPos.x), std::max(y, vp->WorkPos.y)), cond);
     } else {
-        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - th::S(12), vp->WorkPos.y + th::S(12)), cond,
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - Z(12), vp->WorkPos.y + Z(12)), cond,
                                 ImVec2(1, 0));
     }
     ImGui::SetNextWindowSize(ImVec2(w, h));
@@ -576,19 +586,19 @@ void DrawReadout(bool movable) {
 
     // Plate: soft shadow, the menu's indigo gradient, gold hairline inset with diamond end-caps.
     for (int i = 1; i <= 3; ++i) {
-        const float o = th::S(2.0f * i);
-        dl->AddRectFilled(ImVec2(a.x - o, a.y - o + th::S(2)), ImVec2(b.x + o, b.y + o + th::S(2)),
+        const float o = Z(2.0f * i);
+        dl->AddRectFilled(ImVec2(a.x - o, a.y - o + Z(2)), ImVec2(b.x + o, b.y + o + Z(2)),
                           IM_COL32(0, 0, 0, 30 - 8 * i), o);
     }
     dl->AddRectFilledMultiColor(a, b, th::col::kPanelTop, th::col::kPanelTop, th::col::kPanelBottom,
                                 th::col::kPanelBottom);
-    const float in = th::S(3);
+    const float in = Z(3);
     const ImU32 frame = movable ? th::col::kGold : th::col::kGoldDim;
-    dl->AddRect(ImVec2(a.x + in, a.y + in), ImVec2(b.x - in, b.y - in), frame, 0.0f, 0, th::S(1));
+    dl->AddRect(ImVec2(a.x + in, a.y + in), ImVec2(b.x - in, b.y - in), frame, 0.0f, 0, Z(1));
     const float cy = (a.y + b.y) * 0.5f;
     for (float ex : {a.x + in, b.x - in}) {
-        th::Diamond(dl, ImVec2(ex, cy), th::S(5.0f), th::col::kGold);
-        th::Diamond(dl, ImVec2(ex, cy), th::S(2.5f), th::col::kPanelBottom | 0xFF000000);
+        th::Diamond(dl, ImVec2(ex, cy), Z(5.0f), th::col::kGold);
+        th::Diamond(dl, ImVec2(ex, cy), Z(2.5f), th::col::kPanelBottom | 0xFF000000);
     }
 
     float x = a.x + pad;
@@ -600,12 +610,12 @@ void DrawReadout(bool movable) {
         dl->AddText(valFont, valSize, ImVec2(x, cy - valSize * 0.55f), g.color, g.value);
         x += valFont->CalcTextSizeA(valSize, FLT_MAX, 0, g.value).x;
         if (g.suffix) {
-            x += th::S(5);
+            x += Z(5);
             dl->AddText(itFont, itSize, ImVec2(x, cy - itSize * 0.5f), th::col::kTextMuted, g.suffix);
             x += itFont->CalcTextSizeA(itSize, FLT_MAX, 0, g.suffix).x;
         }
         if (i + 1 < n) {
-            th::Diamond(dl, ImVec2(x + sep * 0.5f, cy), th::S(3.0f), th::col::kGoldDim);
+            th::Diamond(dl, ImVec2(x + sep * 0.5f, cy), Z(3.0f), th::col::kGoldDim);
             x += sep;
         }
     }

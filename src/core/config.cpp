@@ -150,6 +150,15 @@ std::wstring ReadoutItemsToString(unsigned mask) {
     return out;
 }
 
+const wchar_t* kReadoutSizes[] = {L"small", L"medium", L"large"};
+
+int ParseReadoutSize(const std::wstring& s) {
+    for (int i = 0; i < 3; ++i) {
+        if (_wcsicmp(s.c_str(), kReadoutSizes[i]) == 0) return i;
+    }
+    return 1;
+}
+
 Config& Mutable() {
     static Config cfg = [] {
         Config c;
@@ -162,6 +171,7 @@ Config& Mutable() {
         c.presentModeOverride = ParsePresentMode(ReadOrDefault(L"Display", L"PresentMode", L"game"));
         c.overlayKey = ToInt(ReadOrDefault(L"Overlay", L"ToggleKey", L"0x2D"), 0x2D);
         c.readout = ToInt(ReadOrDefault(L"Overlay", L"Readout", L"0"), 0) != 0;
+        c.readoutSize = ParseReadoutSize(ReadOrDefault(L"Overlay", L"ReadoutSize", L"medium"));
         c.readoutItems = ParseReadoutItems(ReadOrDefault(L"Overlay", L"ReadoutItems", L"fg,output,fps,latency"));
         c.readoutX = ToInt(ReadOrDefault(L"Overlay", L"ReadoutX", L"-1"), -1);
         c.readoutY = ToInt(ReadOrDefault(L"Overlay", L"ReadoutY", L"-1"), -1);
@@ -204,6 +214,15 @@ void SetAutoKeep(float keep) {
     if (now == old) return;
     Write(L"FrameGen", L"AutoKeep", now);
     EFG_LOG("config: auto keep set to %ls (saved)", now.c_str());
+}
+
+void SetReadoutSize(int size) {
+    Config& c = Mutable();
+    size = size < 0 ? 0 : (size > 2 ? 2 : size);
+    if (c.readoutSize == size) return;
+    c.readoutSize = size;
+    Write(L"Overlay", L"ReadoutSize", kReadoutSizes[size]);
+    EFG_LOG("config: counter size set to %ls (saved)", kReadoutSizes[size]);
 }
 
 void SetReadoutItems(unsigned mask) {
