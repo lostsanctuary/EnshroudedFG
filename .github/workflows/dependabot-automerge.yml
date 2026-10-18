@@ -1,0 +1,45 @@
+name: Dependabot auto-merge
+
+# Turns on auto-merge (squash) for Dependabot pull requests that only bump GitHub Actions, so they
+# merge by themselves once the required build and changelog checks pass. Submodule bumps (minhook,
+# imgui) are left for a person to test in game and merge.
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Belt and braces: besides the ecosystem, every changed file must be a workflow or a local action.
+      - name: Check the PR only touches workflows and actions
+        if: steps.metadata.outputs.package-ecosystem == 'github_actions'
+        id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          files=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only)
+          echo "$files"
+          if echo "$files" | grep -qvE '^\.github/(workflows|actions)/'; then
+            echo "Touches files outside .github/workflows and .github/actions - not enabling auto-merge."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enable auto-merge
+        if: steps.files.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
