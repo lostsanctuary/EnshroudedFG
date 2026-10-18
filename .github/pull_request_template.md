@@ -15,3 +15,4 @@ Following the [test checklist in CONTRIBUTING.md](https://github.com/lostsanctua
 - [ ] Alt-tab
 - [ ] Opening the Insert menu while frame generation runs
 - [ ] Builds with no warnings
+- [ ] Added user-facing changes under `## [Unreleased]` in [CHANGELOG.md](https://github.com/lostsanctuary/EnshroudedFG/blob/main/CHANGELOG.md) (or none needed)
