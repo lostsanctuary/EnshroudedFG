@@ -28,7 +28,7 @@ real camera, so generated frames keep the HUD sharp and stable.
 
 ## Install
 
-1. Download `EnshroudedFG-<version>.zip` from [Releases](https://github.com/lostsanctuary/EnshroudedFG/releases).
+1. Download `EnshroudedFG-<version>.zip` from [Releases](https://github.com/lostsanctuary/EnshroudedFG/releases). [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
 2. Close the game and extract the zip **into the game folder**, so that `winmm.dll` sits next to `enshrouded.exe`. To find the folder, right-click Enshrouded in Steam and choose *Manage → Browse local files*.
 3. Start the game, load into your world and press **Insert**.
 
