@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest a new option or an improvement to the mod.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. If something is broken rather than missing, please use the bug report form instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to do?
+      description: The situation or problem behind the request, e.g. "I want to see VRAM use while playing".
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: How should it work?
+      description: Your idea for it, e.g. a new menu row, an ini key or a change to Auto.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Your GPU and display (resolution, refresh rate) if they matter for the request, screenshots, or links.
