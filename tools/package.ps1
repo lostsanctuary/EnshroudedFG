@@ -44,6 +44,18 @@ Get-ChildItem $slDst -Filter *.dll | ForEach-Object {
 
 $zip = Join-Path $root "dist\EnshroudedFG-$version.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip
+# Compress-Archive in Windows PowerShell 5.1 stores paths with backslashes, which the zip format
+# doesn't allow and some unzip tools mishandle. Write every entry with forward slashes instead.
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
+try {
+    Get-ChildItem $stage -Recurse -File | Sort-Object FullName | ForEach-Object {
+        $entry = $_.FullName.Substring($stage.Length + 1).Replace('\', '/')
+        [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+            $archive, $_.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal)
+    }
+} finally {
+    $archive.Dispose()
+}
 Write-Host "Packaged $zip"
 Get-ChildItem $stage -Recurse -File | ForEach-Object { "  " + $_.FullName.Substring($stage.Length + 1) }
