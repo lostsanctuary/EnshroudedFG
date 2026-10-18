@@ -14,14 +14,14 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       # The Vulkan SDK provides the Vulkan headers and glslc for the compute shaders.
       - name: Cache Vulkan SDK
         id: vulkan-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: C:\VulkanSDK\${{ env.VULKAN_SDK_VERSION }}
           key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}
@@ -57,7 +57,7 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: winmm-${{ github.sha }}
           path: build/Release/winmm.dll
