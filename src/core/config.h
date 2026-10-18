@@ -47,6 +47,8 @@ struct Config {
     unsigned readoutItems = kReadoutDefault;
     // [Overlay] ReadoutSize: small | medium | large (0, 1, 2) - scale of the frame counter.
     int readoutSize = 1;
+    // [Overlay] ReadoutOpacity: opacity of the frame counter in percent (20..100, 10% steps).
+    int readoutOpacity = 100;
     int readoutX = -1;
     int readoutY = -1;
     // [Camera] Source: game = the game's camera read from memory; approx = approximate camera.
@@ -72,7 +74,8 @@ void SetReflexMode(int mode);  // 0 = off, 1 = on, 2 = on + boost
 void SetAutoKeep(float keep);
 void SetReadout(bool on);
 void SetReadoutItems(unsigned mask);
-void SetReadoutSize(int size);  // 0 small, 1 medium, 2 large  // ReadoutItem bits; never empty
+void SetReadoutSize(int size);  // 0 small, 1 medium, 2 large
+void SetReadoutOpacity(int percent);  // 20..100  // ReadoutItem bits; never empty
 void SetReadoutPos(int x, int y);  // -1, -1 = back to the default corner  // saved only when the rounded value changes
 
 }  // namespace efg

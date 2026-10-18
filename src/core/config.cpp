@@ -172,6 +172,7 @@ Config& Mutable() {
         c.overlayKey = ToInt(ReadOrDefault(L"Overlay", L"ToggleKey", L"0x2D"), 0x2D);
         c.readout = ToInt(ReadOrDefault(L"Overlay", L"Readout", L"0"), 0) != 0;
         c.readoutSize = ParseReadoutSize(ReadOrDefault(L"Overlay", L"ReadoutSize", L"medium"));
+        c.readoutOpacity = Clamp(ToInt(ReadOrDefault(L"Overlay", L"ReadoutOpacity", L"100"), 100), 20, 100);
         c.readoutItems = ParseReadoutItems(ReadOrDefault(L"Overlay", L"ReadoutItems", L"fg,output,fps,latency"));
         c.readoutX = ToInt(ReadOrDefault(L"Overlay", L"ReadoutX", L"-1"), -1);
         c.readoutY = ToInt(ReadOrDefault(L"Overlay", L"ReadoutY", L"-1"), -1);
@@ -214,6 +215,15 @@ void SetAutoKeep(float keep) {
     if (now == old) return;
     Write(L"FrameGen", L"AutoKeep", now);
     EFG_LOG("config: auto keep set to %ls (saved)", now.c_str());
+}
+
+void SetReadoutOpacity(int percent) {
+    Config& c = Mutable();
+    percent = Clamp(percent, 20, 100);
+    if (c.readoutOpacity == percent) return;
+    c.readoutOpacity = percent;
+    Write(L"Overlay", L"ReadoutOpacity", std::to_wstring(percent));
+    EFG_LOG("config: counter opacity set to %d%% (saved)", percent);
 }
 
 void SetReadoutSize(int size) {

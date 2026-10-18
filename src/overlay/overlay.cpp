@@ -381,6 +381,14 @@ void DrawMenu() {
         SetReadoutSize(cfg.readoutSize + d);
     }
 
+    char opacity[16];
+    snprintf(opacity, sizeof(opacity), "%d%%", cfg.readoutOpacity);
+    if (int d = th::StepperRow("counteropacity", "Counter Opacity", opacity, cfg.readoutOpacity > 20,
+                               cfg.readoutOpacity < 100, row++, "How see-through the frame counter is (plate and text).",
+                               cfg.readout)) {
+        SetReadoutOpacity(cfg.readoutOpacity + 10 * d);
+    }
+
     // ---- Status: the game's big stat numbers ---------------------------------------------------
     ImGui::Dummy(ImVec2(0, th::S(6)));
     th::SectionHeader("Status");
@@ -581,6 +589,7 @@ void DrawReadout(bool movable) {
     if (!movable) flags |= ImGuiWindowFlags_NoInputs;
     ImGui::Begin("##efgreadout", nullptr, flags);
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    const int firstVertex = dl->VtxBuffer.Size;  // for the opacity pass below
     const ImVec2 a = ImGui::GetWindowPos();
     const ImVec2 b(a.x + w, a.y + h);
 
@@ -617,6 +626,15 @@ void DrawReadout(bool movable) {
         if (i + 1 < n) {
             th::Diamond(dl, ImVec2(x + sep * 0.5f, cy), Z(3.0f), th::col::kGoldDim);
             x += sep;
+        }
+    }
+    // [Overlay] ReadoutOpacity: scale the alpha of everything the counter just drew.
+    if (cfg.readoutOpacity < 100) {
+        const float alpha = cfg.readoutOpacity / 100.0f;
+        for (int v = firstVertex; v < dl->VtxBuffer.Size; ++v) {
+            ImU32& c = dl->VtxBuffer[v].col;
+            const ImU32 a8 = static_cast<ImU32>(((c >> IM_COL32_A_SHIFT) & 0xFF) * alpha + 0.5f);
+            c = (c & ~IM_COL32_A_MASK) | (a8 << IM_COL32_A_SHIFT);
         }
     }
     ImGui::Dummy(ImVec2(w, h));
