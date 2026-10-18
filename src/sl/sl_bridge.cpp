@@ -502,15 +502,16 @@ void EnsureCopyPasses() {
     const bool ring = wantParallel && fenceFns;
     const uint32_t slots = ring ? 3 : 2;
     const render::CopyPass::WaitFn wait = ring ? &WaitForInputs : nullptr;
+    const bool timing = LoadConfig().verboseLog;  // GPU timestamps around each copy
     if (!g_mvCopy.Init("mvec", g_instance, g_physicalDevice, device, VK_FORMAT_R16G16_SFLOAT, kMvConvertSpv,
-                       sizeof(kMvConvertSpv), slots, wait))
+                       sizeof(kMvConvertSpv), slots, wait, timing))
         EFG_LOG("motion-vector copy pass unavailable - tagging the game's SNORM motion vectors directly");
     if (!g_hudlessCopy.Init("hudless", g_instance, g_physicalDevice, device, VK_FORMAT_R8G8B8A8_UNORM, kCopyRgba8Spv,
-                            sizeof(kCopyRgba8Spv), slots, wait))
+                            sizeof(kCopyRgba8Spv), slots, wait, timing))
         EFG_LOG("HUD-less copy pass unavailable - frame generation will run without HUD-less colour");
     if (ring)
         g_depthCopy.Init("depth", g_instance, g_physicalDevice, device, VK_FORMAT_R32_SFLOAT, kCopyR32Spv,
-                         sizeof(kCopyR32Spv), slots, wait);
+                         sizeof(kCopyR32Spv), slots, wait, timing);
     // Every tagged input must be our own copy, or the game would overwrite it while DLSS-G reads it.
     g_parallel = ring && g_mvCopy.Ready() && g_depthCopy.Ready() && g_hudlessCopy.Ready();
     if (wantParallel)
@@ -1124,6 +1125,25 @@ void AfterPresent(unsigned long long presentCount) {
             g_camMaxStep = 0;
         }
         if (presentCount == 2 || presentCount % 6000 == 0) LogReflexState("periodic");
+        if (LoadConfig().verboseLog) {
+            // GPU time of our own copy passes (VerboseLog only), to compare with the frame time.
+            struct {
+                const char* name;
+                render::CopyPass& pass;
+            } passes[] = {{"depth", g_depthCopy}, {"mvec", g_mvCopy}, {"hudless", g_hudlessCopy}};
+            char line[256];
+            int len = snprintf(line, sizeof(line), "copy passes GPU time:");
+            double total = 0;
+            for (auto& p : passes) {
+                double avg = 0, mx = 0;
+                uint32_t n = 0;
+                if (!p.pass.TakeTiming(avg, mx, n)) continue;
+                total += avg;
+                len += snprintf(line + len, sizeof(line) - len, " %s %.1f us (max %.1f, %u)", p.name, avg, mx, n);
+                if (len >= (int)sizeof(line)) break;
+            }
+            if (total > 0) EFG_LOG("%s; total %.1f us per frame (frame %.2f ms)", line, total, 1000.0 / std::max(g_baseFps, 1.0));
+        }
         if (g_parallel) {
             EFG_LOG("parallel: %u fence waits, %u timeouts in the last 600 frames", g_fenceWaits, g_fenceWaitTimeouts);
             g_fenceWaits = g_fenceWaitTimeouts = 0;

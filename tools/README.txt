@@ -74,7 +74,8 @@ EnshroudedFG.ini (next to enshrouded.exe)
 [Overlay]  Readout      0 | 1   corner readout (multiplier, rendered fps, output fps)
 [Overlay]  ReadoutX/Y   readout position in pixels, set by dragging; -1 = top-right corner
 [Camera]   Source       game | approx
-[Debug]    VerboseLog / FrameTrace   diagnostics only (FrameTrace: F11 writes EnshroudedFG\frame_trace.txt)
+[Debug]    VerboseLog / FrameTrace   diagnostics only (FrameTrace: F11 writes EnshroudedFG\frame_trace.txt;
+                        VerboseLog also logs the GPU time of the mod's copy passes every 600 frames)
 
 Notes
 -----

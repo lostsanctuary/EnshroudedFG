@@ -16,7 +16,8 @@ bool Load(T& out, VkDevice device, const char* name) {
 }  // namespace
 
 bool CopyPass::Init(const char* name, VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device,
-                    VkFormat dstFormat, const uint32_t* spirv, size_t spirvBytes, uint32_t slots, WaitFn wait) {
+                    VkFormat dstFormat, const uint32_t* spirv, size_t spirvBytes, uint32_t slots, WaitFn wait,
+                    bool timing) {
     name_ = name;
     device_ = device;
     format_ = dstFormat;
@@ -91,7 +92,31 @@ bool CopyPass::Init(const char* name, VkInstance instance, VkPhysicalDevice phys
         return false;
     }
     ready_ = true;
-    EFG_LOG("CopyPass %s ready (-> format %d, %u slots%s)", name_, format_, slots_, wait_ ? ", fence-guarded" : "");
+
+    if (timing) {
+        auto getProps = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+            RealInstanceProc(instance, "vkGetPhysicalDeviceProperties"));
+        PFN_vkCreateQueryPool createQueryPool = nullptr;
+        VkPhysicalDeviceProperties props{};
+        if (getProps) getProps(physicalDevice, &props);
+        if (getProps && props.limits.timestampComputeAndGraphics && props.limits.timestampPeriod > 0 &&
+            Load(createQueryPool, device, "vkCreateQueryPool") && Load(vkDestroyQueryPool_, device, "vkDestroyQueryPool") &&
+            Load(vkCmdResetQueryPool_, device, "vkCmdResetQueryPool") &&
+            Load(vkCmdWriteTimestamp_, device, "vkCmdWriteTimestamp") &&
+            Load(vkGetQueryPoolResults_, device, "vkGetQueryPoolResults")) {
+            VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qi.queryCount = 2 * kTimingFrames;
+            if (createQueryPool(device, &qi, nullptr, &queryPool_) == VK_SUCCESS) {
+                timestampPeriodNs_ = props.limits.timestampPeriod;
+            } else {
+                queryPool_ = VK_NULL_HANDLE;
+            }
+        }
+        if (!queryPool_) EFG_LOG("CopyPass %s: GPU timestamps unavailable", name_);
+    }
+    EFG_LOG("CopyPass %s ready (-> format %d, %u slots%s%s)", name_, format_, slots_, wait_ ? ", fence-guarded" : "",
+            queryPool_ ? ", GPU-timed" : "");
     return true;
 }
 
@@ -161,6 +186,8 @@ void CopyPass::Shutdown() {
     if (pipeline_) vkDestroyPipeline_(device_, pipeline_, nullptr);
     if (pipelineLayout_) vkDestroyPipelineLayout_(device_, pipelineLayout_, nullptr);
     if (setLayout_) vkDestroyDescriptorSetLayout_(device_, setLayout_, nullptr);
+    if (queryPool_) vkDestroyQueryPool_(device_, queryPool_, nullptr);
+    queryPool_ = VK_NULL_HANDLE;
     pipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
@@ -183,6 +210,15 @@ sl_bridge::ImageRef CopyPass::Copy(VkCommandBuffer cmd, VkImageView srcView, uin
     // 3 slots the fence has normally passed long ago.
     if (wait_ && t.fenceValue) wait_(t.fenceValue);
     t.fenceValue = 0;
+
+    // VerboseLog timing: a timestamp pair per copy, in a ring of kTimingFrames. The pair from
+    // kTimingFrames copies ago is read back (without waiting) before its queries are reused.
+    const uint32_t q = timingFrame_ % kTimingFrames;
+    if (queryPool_) {
+        ReadTiming(q);
+        vkCmdResetQueryPool_(cmd, queryPool_, 2 * q, 2);
+        vkCmdWriteTimestamp_(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool_, 2 * q);
+    }
 
     VkImageMemoryBarrier toWrite{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     toWrite.srcAccessMask = 0;  // earlier DLSS-G reads: Streamline's queue blocking, or the fence wait above
@@ -218,15 +254,50 @@ sl_bridge::ImageRef CopyPass::Copy(VkCommandBuffer cmd, VkImageView srcView, uin
     vkCmdPushConstants_(cmd, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(size), size);
     vkCmdDispatch_(cmd, (width + 7) / 8, (height + 7) / 8, 1);
 
+    // Only DLSS-G reads the copy, with compute shaders or transfers (on its own queues it is ordered by
+    // Streamline's semaphores). Waiting for just those stages lets the game's following graphics work
+    // start without waiting for this dispatch.
     VkImageMemoryBarrier toRead = toWrite;
     toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
     toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     toRead.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    vkCmdPipelineBarrier_(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr,
-                          0, nullptr, 1, &toRead);
+    vkCmdPipelineBarrier_(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                          nullptr, 1, &toRead);
+    if (queryPool_) {
+        vkCmdWriteTimestamp_(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool_, 2 * q + 1);
+        queryWritten_[q] = true;
+        ++timingFrame_;
+    }
 
     return {t.image, t.view, format_, width, height};
+}
+
+void CopyPass::ReadTiming(uint32_t q) {
+    if (!queryWritten_[q]) return;  // never used: its queries were never reset
+    queryWritten_[q] = false;
+    uint64_t ts[2] = {};
+    // No WAIT flag: a pair that is somehow still in flight is skipped rather than stalling the game.
+    if (vkGetQueryPoolResults_(device_, queryPool_, 2 * q, 2, sizeof(ts), ts, sizeof(uint64_t),
+                               VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+        return;
+    const uint64_t delta = (ts[1] - ts[0]) & timestampMask_;
+    const double us = double(delta) * timestampPeriodNs_ / 1000.0;
+    if (us < 0 || us > 100000.0) return;  // wrapped or bogus
+    timingSumUs_ += us;
+    if (us > timingMaxUs_) timingMaxUs_ = us;
+    ++timingCount_;
+}
+
+bool CopyPass::TakeTiming(double& avgUs, double& maxUs, uint32_t& count) {
+    if (!queryPool_ || !timingCount_) return false;
+    avgUs = timingSumUs_ / timingCount_;
+    maxUs = timingMaxUs_;
+    count = timingCount_;
+    timingSumUs_ = timingMaxUs_ = 0;
+    timingCount_ = 0;
+    return true;
 }
 
 void CopyPass::MarkPresented(uint64_t fenceValue) {
