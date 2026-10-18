@@ -93,5 +93,40 @@ Before opening a pull request, please check at least:
 
 - **Scope:** keep each pull request to one change, and describe what you tested and on which GPU.
 - **Style:** match the surrounding code (C++20, the existing naming and comment style). New ini keys go in `src/core/config.*` with a default, and are documented in `tools/README.txt` and the README's settings table.
+- **Changelog:** add a line for any user-facing change under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
 - **Background:** [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) explains why things are done the way they are: Streamline manual hooking, the NGX hooks, HUD-less capture and the camera signatures. Read the relevant part before changing those areas.
 - **Licence:** contributions are accepted under the project's [MIT licence](LICENSE).
+
+## Making a release
+
+Releases are built by the [Release workflow](.github/workflows/release.yml) when a `v*` tag is pushed. For a release `x.y.z`:
+
+1. **Bump the version.** Set `EFG_VERSION_STRING` in [`src/version.h`](src/version.h) to `"x.y.z"`. The workflow refuses a tag that doesn't match it.
+2. **Update the changelog.** In [CHANGELOG.md](CHANGELOG.md):
+   - Rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD`, and add a new, empty `## [Unreleased]` above it.
+   - At the bottom, point the `[Unreleased]` link at `compare/vx.y.z...HEAD` and add a `[x.y.z]` link to the release.
+   - If the release needs background notes, add an entry to [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) too.
+3. **Check the changelog.** The workflow runs this same check and fails if the version has no section or the section is empty:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\check_changelog.ps1 -Version x.y.z
+   ```
+4. **Commit and push `main`**, and wait for the Build workflow to pass.
+5. **Push the tag:**
+   ```powershell
+   git tag -a vx.y.z -m "EnshroudedFG vx.y.z"
+   git push origin vx.y.z
+   ```
+   The Release workflow then checks the version and the changelog, fetches the NVIDIA files, builds and runs `tools/package.ps1`. It creates a **draft** release named `EnshroudedFG vx.y.z`, with `EnshroudedFG-x.y.z.zip` attached and generated notes. If a release for that tag already exists, it uploads the zip to that release instead.
+6. **Publish the draft.** On the [Releases](https://github.com/lostsanctuary/EnshroudedFG/releases) page, replace the generated notes with a proper description and publish:
+   - Follow the earlier releases' style: a summary, an install line, the changes, the defaults and the requirements.
+   - Retitle it `EnshroudedFG vx.y.z - <short summary>`.
+   - Make sure it is marked **Latest**.
+
+If the Release workflow fails, fix the problem on `main`, then delete the tag and push it again:
+
+```powershell
+git tag -d vx.y.z
+git push origin :refs/tags/vx.y.z
+```
+
+Delete any draft it left behind before pushing the tag again.
