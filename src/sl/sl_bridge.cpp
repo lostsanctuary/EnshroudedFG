@@ -488,6 +488,40 @@ uint32_t QueryRefreshRate() {
     return dm.dmDisplayFrequency > 1 ? dm.dmDisplayFrequency : 0;
 }
 
+int g_reflexModeApplied = -1;  // Reflex mode currently set (sl::ReflexMode), -1 = not yet
+double g_latencyMs = 0.0;      // average render latency from Reflex reports (0 = no data)
+
+// Reflex mode from the config; DLSS-G refuses to run without Reflex, so "off" becomes "on" while FG runs.
+int EffectiveReflexMode() {
+    int mode = LoadConfig().reflexMode;
+    if (mode == 0 && g_fgOn) mode = 1;
+    return mode;
+}
+
+// Average latency over the frames Reflex reports: simulation start -> GPU render end, i.e. the part of
+// the input-to-photon path the game and the GPU control (excludes the display's scanout).
+void UpdateLatency() {
+    if (!p_slReflexGetState) return;
+    sl::ReflexState st{};
+    {
+        SlCallScope scope;
+        if (p_slReflexGetState(st) != sl::Result::eOk || !st.latencyReportAvailable) {
+            g_latencyMs = 0.0;
+            return;
+        }
+    }
+    double sum = 0;
+    int n = 0;
+    for (const auto& r : st.frameReport) {
+        if (!r.simStartTime || r.gpuRenderEndTime <= r.simStartTime) continue;
+        const uint64_t us = r.gpuRenderEndTime - r.simStartTime;
+        if (us > 1000000) continue;  // stale or bogus entry
+        sum += double(us);
+        ++n;
+    }
+    g_latencyMs = n ? sum / n / 1000.0 : 0.0;
+}
+
 // Output cap through the Reflex frame limiter. While DLSS-G runs, the driver applies frameLimitUs to
 // presented frames (measured in-game: a 272 fps limit gave ~272 fps output and 272/N rendered fps), so
 // the limit is simply the output interval. Off by default: it lowers rendered fps at high multipliers.
@@ -501,9 +535,11 @@ void ApplyFrameLimit() {
     }
     g_outputCapFps = cap;
     uint32_t limitUs = cap > 0 ? static_cast<uint32_t>(1e6 / cap) : 0;
-    if (limitUs == g_frameLimitUs) return;
+    const int mode = EffectiveReflexMode();
+    if (limitUs == g_frameLimitUs && mode == g_reflexModeApplied) return;
     sl::ReflexOptions ro{};
-    ro.mode = sl::ReflexMode::eLowLatency;
+    ro.mode = mode == 0 ? sl::ReflexMode::eOff
+                        : (mode == 2 ? sl::ReflexMode::eLowLatencyWithBoost : sl::ReflexMode::eLowLatency);
     ro.frameLimitUs = limitUs;
     sl::Result r;
     {
@@ -512,7 +548,12 @@ void ApplyFrameLimit() {
     }
     EFG_LOG("output cap: %s -> Reflex frame limit %u us (%.0f fps, refresh %u Hz, %ux) -> %s", cap > 0 ? "on" : "off",
             limitUs, limitUs ? 1e6 / limitUs : 0.0, g_refreshHz, g_fgFrames + 1, ResultName(r));
-    if (r == sl::Result::eOk) g_frameLimitUs = limitUs;
+    static const char* kModes[] = {"off", "on", "on + boost"};
+    if (mode != g_reflexModeApplied) EFG_LOG("Reflex: %s -> %s", kModes[mode], ResultName(r));
+    if (r == sl::Result::eOk) {
+        g_frameLimitUs = limitUs;
+        g_reflexModeApplied = mode;
+    }
 }
 
 uint32_t MaxMultiplier() { return g_framesToGenerateMax ? g_framesToGenerateMax + 1 : 2; }
@@ -922,10 +963,10 @@ void BeforePresent() {
 
     // Frame generation only while the 3D world renders (frames with DLSS-SR inputs); menus,
     // loading screens etc. have no evaluate, so FG is switched off and the tags are cleared.
-    // Also paused while our overlay menu is open, so the menu is never interpolated.
+    // It keeps running while our overlay menu is open: the menu is drawn after the HUD-less capture, so
+    // DLSS-G treats it as UI (like the game's HUD) instead of interpolating it.
     const int streak = g_frameHasSr ? g_srStreak + 1 : 0;
-    const bool wantFg = FrameGenEnabled(LoadConfig()) && g_frameHasSr && streak >= kStreakToEnable &&
-                        !overlay::Visible();
+    const bool wantFg = FrameGenEnabled(LoadConfig()) && g_frameHasSr && streak >= kStreakToEnable;
     if (!g_frameHasSr) TagNull();
     SetFrameGeneration(wantFg);
     ApplyFrameLimit();
@@ -958,6 +999,7 @@ void AfterPresent(unsigned long long presentCount) {
         EFG_LOG("output cap check: rendered %.1f fps at %ux -> ~%.0f fps output (cap %.0f)", g_baseFps, g_fgFrames + 1,
                 g_baseFps * (g_fgFrames + 1), g_outputCapFps);
     }
+    if ((overlay::Visible() || LoadConfig().readout) && presentCount % 30 == 0) UpdateLatency();
     if (overlay::Visible() && presentCount % 30 == 0 && p_slDLSSGGetState) {
         sl::DLSSGState st{};
         SlCallScope scope;
@@ -1063,6 +1105,8 @@ FgStatus GetFgStatus() {
     s.baseFps = g_baseFps;
     s.refreshHz = g_refreshHz;
     s.outputCapFps = g_outputCapFps;
+    s.reflexMode = g_reflexModeApplied < 0 ? 1 : g_reflexModeApplied;
+    s.latencyMs = g_latencyMs;
     return s;
 }
 

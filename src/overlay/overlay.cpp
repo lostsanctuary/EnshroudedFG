@@ -14,6 +14,7 @@
 #include "hooks/hook_util.h"
 #include "debug/frame_trace.h"
 #include "hooks/hooks.h"
+#include "overlay/theme.h"
 #include "version.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -255,123 +256,303 @@ const char* KeyName(int vk) {
 }
 
 void DrawMenu() {
+    namespace th = theme;
     const sl_bridge::FgStatus st = sl_bridge::GetFgStatus();
     const Config& cfg = LoadConfig();
+    const bool autoMode = cfg.multiplier == kMultiplierAuto;
+    const uint32_t maxMult = st.maxMultiplier ? st.maxMultiplier : 6;
 
-    ImGui::SetNextWindowPos(ImVec2(40, 40), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Enshrouded Frame Generation", nullptr,
-                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::TextDisabled("EnshroudedFG %s  -  DLSS Multi Frame Generation", EFG_VERSION_STRING);
-    ImGui::Separator();
+    static float lastHeight = 0.0f;
+    const float width = th::S(640);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(width, lastHeight > 0 ? lastHeight : th::S(720)));
+    ImGui::Begin("##efgmenu", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoScrollWithMouse);
+    const ImVec2 wp = ImGui::GetWindowPos();
+    th::PanelChrome(ImGui::GetWindowDrawList(), wp, ImVec2(wp.x + width, wp.y + ImGui::GetWindowHeight()));
 
-    ImGui::TextUnformatted("Frame generation");
-    static const char* kLabels[] = {"Off", "2x", "3x", "4x", "5x", "6x"};
-    for (int i = 0; i < 6; ++i) {
-        const int value = i == 0 ? 1 : i + 1;
-        const bool supported = value == 1 || st.maxMultiplier == 0 || static_cast<uint32_t>(value) <= st.maxMultiplier;
-        if (i) ImGui::SameLine();
-        ImGui::BeginDisabled(!supported || !st.slActive);
-        ImGui::PushID(i);
-        if (ImGui::RadioButton(kLabels[i], cfg.multiplier == value)) SetMultiplier(value);
-        ImGui::PopID();
-        ImGui::EndDisabled();
-        if (!supported && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Not supported on this GPU (max %ux)", st.maxMultiplier);
+    char version[32];
+    snprintf(version, sizeof(version), "v%s", EFG_VERSION_STRING);
+    th::TitleBar("FRAME GENERATION", version);
+
+    // ---- Output: the settings rows ------------------------------------------------------------
+    th::SectionHeader("Output");
+    int row = 0;
+
+    // Multiplier: Off, 2x .. max, Auto.
+    int options[8];
+    int count = 0;
+    options[count++] = 1;
+    for (int m = 2; m <= static_cast<int>(maxMult) && m <= 6; ++m) options[count++] = m;
+    options[count++] = kMultiplierAuto;
+    int current = 0;
+    for (int i = 0; i < count; ++i) {
+        if (options[i] == cfg.multiplier) current = i;
     }
-    ImGui::SameLine();
-    char fgAutoLabel[48];
-    snprintf(fgAutoLabel, sizeof(fgAutoLabel), "Auto (%ux)###fgauto", st.autoMultiplier);
-    ImGui::BeginDisabled(!st.slActive);
-    if (ImGui::RadioButton(fgAutoLabel, cfg.multiplier == kMultiplierAuto)) SetMultiplier(kMultiplierAuto);
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Picks 2x..%ux by itself so that rendered fps x multiplier just fills your display\n"
-                          "(%.0f fps). Re-checked every 2 s while you play; the menu shows its current choice.",
-                          st.maxMultiplier ? st.maxMultiplier : 6, st.refreshHz * 0.97);
-    ImGui::TextUnformatted("Output cap");
-    if (ImGui::RadioButton("Off##outputcap", cfg.outputCap == 0)) SetOutputCap(0);
-    ImGui::SameLine();
-    char autoLabel[64];
-    if (st.refreshHz)
-        snprintf(autoLabel, sizeof(autoLabel), "Auto (%.0f fps, %u Hz display)", st.refreshHz * 0.97, st.refreshHz);
-    else
-        snprintf(autoLabel, sizeof(autoLabel), "Auto (display refresh)");
-    if (ImGui::RadioButton(autoLabel, cfg.outputCap < 0)) SetOutputCap(-1);
-    if (cfg.outputCap > 0) {
-        ImGui::SameLine();
-        ImGui::RadioButton("Custom (ini)", true);
-        ImGui::SameLine();
-        ImGui::TextDisabled("%d fps", cfg.outputCap);
+    char multValue[32];
+    if (cfg.multiplier == 1) snprintf(multValue, sizeof(multValue), "Off");
+    else if (autoMode) snprintf(multValue, sizeof(multValue), "Auto (%ux)", st.autoMultiplier);
+    else snprintf(multValue, sizeof(multValue), "%dx", cfg.multiplier);
+    char multTip[256];
+    snprintf(multTip, sizeof(multTip),
+             "DLSS Multi Frame Generation: Off, 2x..%ux, or Auto.\nAuto picks the multiplier so that rendered fps x "
+             "multiplier just fills your display (%.0f fps).",
+             maxMult, st.refreshHz * 0.97);
+    if (int d = th::StepperRow("mult", "Frame Generation", multValue, current > 0, current + 1 < count, row++, multTip,
+                               st.slActive)) {
+        SetMultiplier(options[current + d]);
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Keeps the displayed frame rate at or below the cap (Reflex limiter).\n"
-                          "Rendering then runs at cap / multiplier, which adds latency at high multipliers.\n"
-                          "Usually better: pick the multiplier whose output matches your refresh rate.");
-    ImGui::Spacing();
 
-    bool gameCamera = cfg.useGameCamera;
-    if (ImGui::Checkbox("Use game camera data", &gameCamera)) SetUseGameCamera(gameCamera);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Feed DLSS-G the game's real camera (position, rotation, FOV).\nOff = approximate camera.");
-    bool readout = cfg.readout;
-    if (ImGui::Checkbox("Corner readout", &readout)) SetReadout(readout);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Small always-on readout: multiplier (Auto's current choice), rendered fps and\n"
-                          "output fps. While this menu is open, drag it where you want it; right-click it\n"
-                          "to put it back in the top-right corner.");
-    ImGui::Spacing();
+    // Output cap: Off / Auto (a custom value from the ini is shown but not offered).
+    char capValue[48];
+    if (cfg.outputCap == 0) snprintf(capValue, sizeof(capValue), "Off");
+    else if (cfg.outputCap < 0 && st.refreshHz) snprintf(capValue, sizeof(capValue), "Auto (%.0f fps)", st.refreshHz * 0.97);
+    else if (cfg.outputCap < 0) snprintf(capValue, sizeof(capValue), "Auto");
+    else snprintf(capValue, sizeof(capValue), "%d fps (ini)", cfg.outputCap);
+    if (int d = th::StepperRow("cap", "Output Cap", capValue, cfg.outputCap != 0, cfg.outputCap == 0, row++,
+                               "Keeps the displayed frame rate at or below your refresh rate (Reflex limiter).\n"
+                               "Rendering then runs at cap / multiplier, which adds latency at high multipliers.")) {
+        SetOutputCap(d > 0 ? -1 : 0);
+    }
 
+    static const char* kReflex[] = {"Off", "On", "On + Boost"};
+    char reflexValue[40];
+    if (cfg.reflexMode == 0 && st.reflexMode != 0) snprintf(reflexValue, sizeof(reflexValue), "On (FG needs it)");
+    else snprintf(reflexValue, sizeof(reflexValue), "%s", kReflex[cfg.reflexMode]);
+    if (int d = th::StepperRow("reflex", "NVIDIA Reflex", reflexValue, cfg.reflexMode > 0, cfg.reflexMode < 2, row++,
+                               "Reflex keeps the render queue short for lower input latency.\n"
+                               "On + Boost also keeps GPU clocks up when the CPU is the bottleneck.\n"
+                               "Frame generation requires Reflex, so Off only applies while it is off.",
+                               st.slActive)) {
+        SetReflexMode(cfg.reflexMode + d);
+    }
+
+    if (int d = th::StepperRow("camera", "Camera Data", cfg.useGameCamera ? "Game" : "Approximate", !cfg.useGameCamera,
+                               cfg.useGameCamera, row++,
+                               "Game: DLSS-G gets the game's real camera (position, rotation, FOV).\n"
+                               "Approximate: generic camera, for comparison only.")) {
+        SetUseGameCamera(d < 0);
+    }
+
+    if (int d = th::StepperRow("readout", "Frame Counter", cfg.readout ? "On" : "Off", cfg.readout, !cfg.readout, row++,
+                               "Small always-on counter: multiplier, output and rendered fps.\n"
+                               "While this menu is open you can drag it; right-click puts it back in the corner.")) {
+        SetReadout(d > 0);
+    }
+
+    // What the counter shows: a dropdown of check items.
+    struct CounterItem {
+        unsigned bit;
+        const char* name;
+        const char* shortName;
+    };
+    static const CounterItem kCounterItems[] = {
+        {kReadoutFg, "Frame Generation", "FG"},   {kReadoutOutput, "Output fps", "Output"},
+        {kReadoutFps, "Rendered fps", "FPS"},     {kReadoutLatency, "Latency", "Latency"},
+        {kReadoutFrameTime, "Frame Time", "Frame time"}, {kReadoutReflex, "Reflex Mode", "Reflex"}};
+    const unsigned items = cfg.readoutItems;
+    int selected = 0;
+    char preview[64] = "";
+    for (const auto& it : kCounterItems) {
+        if (!(items & it.bit)) continue;
+        if (selected++) strncat_s(preview, ", ", _TRUNCATE);
+        strncat_s(preview, it.shortName, _TRUNCATE);
+    }
+    if (selected == static_cast<int>(std::size(kCounterItems))) snprintf(preview, sizeof(preview), "Everything");
+    else if (selected > 3) snprintf(preview, sizeof(preview), "%d items", selected);
+    if (th::DropdownRow("counteritems", "Counter Shows", preview, row++,
+                        "Choose what the frame counter displays.", cfg.readout)) {
+        for (const auto& it : kCounterItems) {
+            bool on = (items & it.bit) != 0;
+            const bool canToggle = !(on && selected == 1);
+            if (th::DropdownCheck(it.name, &on, canToggle)) SetReadoutItems(on ? (items | it.bit) : (items & ~it.bit));
+        }
+        th::EndDropdown();
+    }
+
+    // ---- Status: the game's big stat numbers ---------------------------------------------------
+    ImGui::Dummy(ImVec2(0, th::S(6)));
+    th::SectionHeader("Status");
+    ImGui::Dummy(ImVec2(0, th::S(2)));
+    const unsigned shownMult = st.multiplier > 1 ? st.multiplier : 1;
+    char rendered[24], output[24], mode[24];
+    snprintf(rendered, sizeof(rendered), "%.0f", st.baseFps);
+    // Expected output only means something in the world (FG is off in menus and loading screens).
+    const bool expectOutput = st.worldFrames && st.multiplier > 1;
+    snprintf(output, sizeof(output), "%.0f", st.baseFps * (expectOutput ? shownMult : 1));
+    if (st.multiplier <= 1) snprintf(mode, sizeof(mode), "Off");
+    else snprintf(mode, sizeof(mode), "%s%ux", autoMode ? "Auto " : "", st.multiplier);
+    char latency[24];
+    if (st.latencyMs > 0) snprintf(latency, sizeof(latency), "%.0f ms", st.latencyMs);
+    else snprintf(latency, sizeof(latency), "-");
+    const float statW = (width - th::S(56)) / 4.0f;
+    const float statX = wp.x + th::S(28);
+    const float statY = ImGui::GetCursorScreenPos().y;
+    ImGui::SetCursorScreenPos(ImVec2(statX, statY));
+    th::Stat("RENDERED", rendered, theme::col::kText, statW);
+    ImGui::SetCursorScreenPos(ImVec2(statX + statW, statY));
+    th::Stat("OUTPUT", output, expectOutput ? theme::col::kGold : theme::col::kTextMuted, statW);
+    ImGui::SetCursorScreenPos(ImVec2(statX + 2 * statW, statY));
+    th::Stat("MULTIPLIER", mode, st.multiplier > 1 ? theme::col::kAccent : theme::col::kTextMuted, statW);
+    ImGui::SetCursorScreenPos(ImVec2(statX + 3 * statW, statY));
+    th::Stat("LATENCY", latency, st.latencyMs > 0 ? theme::col::kText : theme::col::kTextMuted, statW);
+    ImGui::SetCursorScreenPos(ImVec2(wp.x, ImGui::GetCursorScreenPos().y + th::S(12)));
+
+    char line[160];
     if (!st.slActive) {
-        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "Streamline is not active - see EnshroudedFG\\log.txt");
-    } else if (st.multiplier == 1) {
-        ImGui::TextUnformatted("Status: off");
+        th::StatusLine(theme::col::kRed, "Streamline is not active - see EnshroudedFG\\log.txt");
+    } else if (st.multiplier <= 1) {
+        th::StatusLine(theme::col::kTextDim, "Frame generation is off.");
     } else if (!st.worldFrames) {
-        ImGui::TextUnformatted("Status: waiting for the game world (off in menus and loading screens)");
+        th::StatusLine(theme::col::kAccent, "Waiting for the world - frame generation is off in menus and loading screens.");
     } else {
-        ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1), "Status: %ux%s - paused while this menu is open", st.multiplier,
-                           cfg.multiplier == kMultiplierAuto ? " (Auto)" : "");
+        if (st.fgOn)
+            snprintf(line, sizeof(line), "Generating at %ux - changes apply live.", st.multiplier);
+        else
+            snprintf(line, sizeof(line), "Starting at %ux...", st.multiplier);
+        th::StatusLine(theme::col::kGreen, line);
     }
-    if (st.status) ImGui::TextColored(ImVec4(1, 0.6f, 0.2f, 1), "DLSS-G status flags: 0x%x", st.status);
-    ImGui::Text("Rendered: %.0f fps   Expected output: ~%.0f fps", st.baseFps, st.baseFps * st.multiplier);
-    if (st.outputCapFps > 0)
-        ImGui::Text("Output capped at %.0f fps -> rendering limited to %.0f fps at %ux", st.outputCapFps,
-                    st.outputCapFps / st.multiplier, st.multiplier);
-    if (st.maxMultiplier) ImGui::TextDisabled("This GPU supports up to %ux.", st.maxMultiplier);
-    if (st.refreshHz && st.baseFps > 1 && cfg.outputCap == 0 && cfg.multiplier != kMultiplierAuto) {
-        const int fit = static_cast<int>(st.refreshHz / st.baseFps);
-        ImGui::TextDisabled("Tip: at %.0f rendered fps, %dx already reaches your %u Hz display.", st.baseFps,
-                            fit < 2 ? 2 : (fit > 6 ? 6 : fit), st.refreshHz);
+    if (st.status) {
+        snprintf(line, sizeof(line), "DLSS-G reports status flags 0x%x.", st.status);
+        th::StatusLine(theme::col::kRed, line);
     }
-    static const char* kModes[] = {"as the game requests", "immediate (no vsync)", "mailbox", "fifo (vsync)"};
-    ImGui::TextDisabled("Present mode: %s - [Display] PresentMode in the ini, applies after restart.",
-                        kModes[cfg.presentModeOverride]);
+    if (st.outputCapFps > 0) {
+        snprintf(line, sizeof(line), "Output capped at %.0f fps: rendering limited to %.0f fps.", st.outputCapFps,
+                 st.outputCapFps / shownMult);
+        th::StatusLine(theme::col::kAccent, line);
+    }
 
-    ImGui::Separator();
-    ImGui::TextDisabled("%s closes this menu. Changes are saved to EnshroudedFG.ini.", KeyName(cfg.overlayKey));
+    // Quieter details in italics.
+    ImGui::Dummy(ImVec2(0, th::S(4)));
+    ImGui::PushFont(theme::GetFonts().serifItalic, theme::kSmall + 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(theme::col::kTextDim));
+    const float textX = wp.x + th::S(48);
+    ImGui::PushTextWrapPos(width - th::S(34));  // window-local x
+    if (st.refreshHz && st.baseFps > 1 && cfg.outputCap == 0 && !autoMode) {
+        const int fit = static_cast<int>(st.refreshHz / st.baseFps);
+        ImGui::SetCursorScreenPos(ImVec2(textX, ImGui::GetCursorScreenPos().y));
+        ImGui::Text("At %.0f rendered fps, %dx already fills your %u Hz display.", st.baseFps,
+                    fit < 2 ? 2 : (fit > 6 ? 6 : fit), st.refreshHz);
+    }
+    static const char* kModes[] = {"as the game requests", "immediate", "mailbox", "fifo (vsync)"};
+    ImGui::SetCursorScreenPos(ImVec2(textX, ImGui::GetCursorScreenPos().y));
+    ImGui::Text("This GPU supports up to %ux. Present mode: %s.", maxMult, kModes[cfg.presentModeOverride & 3]);
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+
+    // ---- Footer: key hints like the game's ("ESC Close") ----------------------------------------
+    const float ruleY = ImGui::GetCursorScreenPos().y + th::S(14);
+    th::GoldRule(ImGui::GetWindowDrawList(), wp.x + th::S(18), wp.x + width - th::S(18), ruleY, true);
+    ImGui::SetCursorScreenPos(ImVec2(wp.x + th::S(28), ruleY + th::S(16)));
+    if (th::KeyHint(KeyName(cfg.overlayKey), "Close")) SetVisible(false);
+    ImGui::SameLine(0, th::S(26));
+    ImGui::PushFont(theme::GetFonts().serifItalic, theme::kSmall + 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(theme::col::kTextMuted));
+    ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, ImGui::GetCursorScreenPos().y + th::S(3)));
+    ImGui::TextUnformatted("Changes are saved to EnshroudedFG.ini");
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+
+    lastHeight = ImGui::GetCursorScreenPos().y - wp.y + th::S(26);
     ImGui::End();
 }
 
-// Always-on corner readout. Drawn onto the final image like the game's HUD, so the HUD-less colour
-// keeps DLSS-G from interpolating it. While the menu is open it takes the mouse: drag it anywhere
-// (saved on release), right-click puts it back in the top-right corner.
+// Always-on frame counter, a miniature of the menu panel: indigo plate with a gold hairline frame and
+// diamond end-caps, spaced parchment captions, bold serif values (multiplier in the menu's amber, output
+// in gold), gold diamonds between segments. Drawn onto the final image like the game's HUD, so the
+// HUD-less colour keeps DLSS-G from interpolating it. While the menu is open it takes the mouse: drag it
+// anywhere (saved on release), right-click puts it back in the top-right corner.
 void DrawReadout(bool movable) {
+    namespace th = theme;
     static ImVec2 lastSize(0, 0);
     static bool dragged = false;  // the user is dragging it (menu open)
     static bool snap = false;     // re-place it next frame even while movable (after a reset)
     const Config& cfg = LoadConfig();
     const sl_bridge::FgStatus st = sl_bridge::GetFgStatus();
     const bool autoMode = cfg.multiplier == kMultiplierAuto;
-    char mode[32];
-    if (!st.slActive)
-        snprintf(mode, sizeof(mode), "FG unavailable");
-    else if (st.multiplier <= 1)
-        snprintf(mode, sizeof(mode), "FG off");
-    else
-        snprintf(mode, sizeof(mode), "FG %s%ux%s", autoMode ? "Auto " : "", st.multiplier, st.fgOn ? "" : " paused");
-    const double output = st.baseFps * (st.fgOn ? st.multiplier : 1);
 
-    // Fixed: the saved spot (kept on screen if the resolution shrank) or the top-right corner.
-    // Movable: placed once when it appears, then ImGui owns the position while the user drags it.
+    // Segments in a fixed order, filtered by [Overlay] ReadoutItems.
+    struct Segment {
+        const char* caption;
+        char value[24];
+        ImU32 color;
+        const char* suffix;
+    };
+    Segment segs[6];
+    int n = 0;
+    const unsigned items = cfg.readoutItems;
+    const bool fgActive = st.slActive && st.multiplier > 1;
+    if (items & kReadoutFg) {
+        Segment& g = segs[n++];
+        g.caption = "FG";
+        if (!st.slActive) snprintf(g.value, sizeof(g.value), "N/A");
+        else if (st.multiplier <= 1) snprintf(g.value, sizeof(g.value), "Off");
+        else snprintf(g.value, sizeof(g.value), "%s%ux", autoMode ? "Auto " : "", st.multiplier);
+        g.color = fgActive ? th::col::kAccent : th::col::kTextMuted;
+        // FG pauses in the game's menus and loading screens: say so in muted italics.
+        g.suffix = fgActive && !st.fgOn ? "paused" : nullptr;
+    }
+    if (items & kReadoutOutput) {
+        Segment& g = segs[n++];
+        g.caption = "OUTPUT";
+        snprintf(g.value, sizeof(g.value), "%.0f", st.baseFps * (st.fgOn ? st.multiplier : 1));
+        g.color = th::col::kGold;
+        g.suffix = nullptr;
+    }
+    if (items & kReadoutFps) {
+        Segment& g = segs[n++];
+        g.caption = "FPS";
+        snprintf(g.value, sizeof(g.value), "%.0f", st.baseFps);
+        g.color = th::col::kText;
+        g.suffix = nullptr;
+    }
+    if (items & kReadoutLatency) {
+        Segment& g = segs[n++];
+        g.caption = "LATENCY";
+        if (st.latencyMs > 0) snprintf(g.value, sizeof(g.value), "%.0fms", st.latencyMs);
+        else snprintf(g.value, sizeof(g.value), "-");
+        g.color = st.latencyMs > 0 ? th::col::kText : th::col::kTextMuted;
+        g.suffix = nullptr;
+    }
+    if (items & kReadoutFrameTime) {
+        Segment& g = segs[n++];
+        g.caption = "FRAME";
+        if (st.baseFps > 1) snprintf(g.value, sizeof(g.value), "%.1fms", 1000.0 / st.baseFps);
+        else snprintf(g.value, sizeof(g.value), "-");
+        g.color = th::col::kText;
+        g.suffix = nullptr;
+    }
+    if (items & kReadoutReflex) {
+        Segment& g = segs[n++];
+        g.caption = "REFLEX";
+        static const char* kReflex[] = {"Off", "On", "Boost"};
+        snprintf(g.value, sizeof(g.value), "%s", kReflex[st.reflexMode < 0 || st.reflexMode > 2 ? 1 : st.reflexMode]);
+        g.color = st.reflexMode ? th::col::kGreen : th::col::kTextMuted;
+        g.suffix = nullptr;
+    }
+
+    const th::Fonts& fonts = th::GetFonts();
+    ImFont* capFont = fonts.serif ? fonts.serif : ImGui::GetFont();
+    ImFont* valFont = fonts.serifBold ? fonts.serifBold : ImGui::GetFont();
+    ImFont* itFont = fonts.serifItalic ? fonts.serifItalic : ImGui::GetFont();
+    const float capSize = th::S(12.5f), valSize = th::S(18.0f), itSize = th::S(14.0f);
+    const float capSpacing = th::S(1.4f);
+    const float pad = th::S(20), gap = th::S(7), sep = th::S(22);
+    const float h = th::S(32);
+
+    float w = pad * 2;
+    for (int i = 0; i < n; ++i) {
+        w += th::SpacedTextWidth(capFont, capSize, segs[i].caption, capSpacing) + gap +
+             valFont->CalcTextSizeA(valSize, FLT_MAX, 0, segs[i].value).x;
+        if (segs[i].suffix) w += th::S(5) + itFont->CalcTextSizeA(itSize, FLT_MAX, 0, segs[i].suffix).x;
+        if (i + 1 < n) w += sep;
+    }
+
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const ImGuiCond cond = movable && !snap ? ImGuiCond_Appearing : ImGuiCond_Always;
     snap = false;
@@ -380,16 +561,56 @@ void DrawReadout(bool movable) {
         const float y = std::min(float(cfg.readoutY), vp->WorkPos.y + vp->WorkSize.y - lastSize.y);
         ImGui::SetNextWindowPos(ImVec2(std::max(x, vp->WorkPos.x), std::max(y, vp->WorkPos.y)), cond);
     } else {
-        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 12, vp->WorkPos.y + 12), cond, ImVec2(1, 0));
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - th::S(12), vp->WorkPos.y + th::S(12)), cond,
+                                ImVec2(1, 0));
     }
-    ImGui::SetNextWindowBgAlpha(0.45f);
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+    ImGui::SetNextWindowSize(ImVec2(w, h));
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground |
                              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                              ImGuiWindowFlags_NoNav;
     if (!movable) flags |= ImGuiWindowFlags_NoInputs;
     ImGui::Begin("##efgreadout", nullptr, flags);
-    ImGui::Text("%s  |  %.0f rendered  |  %.0f output fps", mode, st.baseFps, output);
-    lastSize = ImGui::GetWindowSize();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 a = ImGui::GetWindowPos();
+    const ImVec2 b(a.x + w, a.y + h);
+
+    // Plate: soft shadow, the menu's indigo gradient, gold hairline inset with diamond end-caps.
+    for (int i = 1; i <= 3; ++i) {
+        const float o = th::S(2.0f * i);
+        dl->AddRectFilled(ImVec2(a.x - o, a.y - o + th::S(2)), ImVec2(b.x + o, b.y + o + th::S(2)),
+                          IM_COL32(0, 0, 0, 30 - 8 * i), o);
+    }
+    dl->AddRectFilledMultiColor(a, b, th::col::kPanelTop, th::col::kPanelTop, th::col::kPanelBottom,
+                                th::col::kPanelBottom);
+    const float in = th::S(3);
+    const ImU32 frame = movable ? th::col::kGold : th::col::kGoldDim;
+    dl->AddRect(ImVec2(a.x + in, a.y + in), ImVec2(b.x - in, b.y - in), frame, 0.0f, 0, th::S(1));
+    const float cy = (a.y + b.y) * 0.5f;
+    for (float ex : {a.x + in, b.x - in}) {
+        th::Diamond(dl, ImVec2(ex, cy), th::S(5.0f), th::col::kGold);
+        th::Diamond(dl, ImVec2(ex, cy), th::S(2.5f), th::col::kPanelBottom | 0xFF000000);
+    }
+
+    float x = a.x + pad;
+    for (int i = 0; i < n; ++i) {
+        const Segment& g = segs[i];
+        const float cw = th::SpacedTextWidth(capFont, capSize, g.caption, capSpacing);
+        th::SpacedText(dl, capFont, capSize, ImVec2(x, cy - capSize * 0.5f), th::col::kParchment, g.caption, capSpacing);
+        x += cw + gap;
+        dl->AddText(valFont, valSize, ImVec2(x, cy - valSize * 0.55f), g.color, g.value);
+        x += valFont->CalcTextSizeA(valSize, FLT_MAX, 0, g.value).x;
+        if (g.suffix) {
+            x += th::S(5);
+            dl->AddText(itFont, itSize, ImVec2(x, cy - itSize * 0.5f), th::col::kTextMuted, g.suffix);
+            x += itFont->CalcTextSizeA(itSize, FLT_MAX, 0, g.suffix).x;
+        }
+        if (i + 1 < n) {
+            th::Diamond(dl, ImVec2(x + sep * 0.5f, cy), th::S(3.0f), th::col::kGoldDim);
+            x += sep;
+        }
+    }
+    ImGui::Dummy(ImVec2(w, h));
+    lastSize = ImVec2(w, h);
     if (movable) {
         if (ImGui::IsWindowHovered() && !dragged) {
             ImGui::SetTooltip("Drag to move. Right-click: back to the top-right corner.");
@@ -476,9 +697,7 @@ void OnWindow(HWND hwnd) {
         io.IniFilename = nullptr;
         io.LogFilename = nullptr;
         io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
-        ImGui::StyleColorsDark();
-        ImGui::GetStyle().WindowRounding = 6.0f;
-        ImGui::GetStyle().FrameRounding = 4.0f;
+        theme::Init();
         ImGui_ImplWin32_Init(hwnd);
         g_imguiContext = true;
     }
@@ -551,6 +770,7 @@ const VkPresentInfoKHR* BeforePresent(VkQueue queue, const VkPresentInfoKHR* inf
     if (p_WaitForFences(g_device, 1, &pi.fence, VK_TRUE, 1000000000ull) != VK_SUCCESS) return info;
     p_ResetFences(g_device, 1, &pi.fence);
 
+    theme::UpdateScale(static_cast<float>(g_extent.height));
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();

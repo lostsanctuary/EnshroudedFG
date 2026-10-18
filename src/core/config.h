@@ -6,6 +6,18 @@ constexpr int kMultiplierAuto = 0;
 
 // Settings from <game>\EnshroudedFG.ini. Missing keys are written with their defaults on start-up, so
 // the ini always documents every option.
+// What the frame counter shows ([Overlay] ReadoutItems).
+enum ReadoutItem : unsigned {
+    kReadoutFg = 1u << 0,         // frame generation mode (Auto 3x, Off, ...)
+    kReadoutOutput = 1u << 1,     // displayed fps
+    kReadoutFps = 1u << 2,        // rendered fps
+    kReadoutLatency = 1u << 3,    // Reflex latency
+    kReadoutFrameTime = 1u << 4,  // rendered frame time in ms
+    kReadoutReflex = 1u << 5,     // Reflex mode
+    kReadoutAll = (1u << 6) - 1,
+};
+constexpr unsigned kReadoutDefault = kReadoutFg | kReadoutOutput | kReadoutFps | kReadoutLatency;
+
 struct Config {
     // [FrameGen] Multiplier: 1 = off, 2..6 = DLSS multi frame generation 2x..6x,
     // kMultiplierAuto ("auto") = pick 2x..max at run time so the output just fills the display.
@@ -21,10 +33,15 @@ struct Config {
     int presentModeOverride = 0;
     // [Overlay] ToggleKey: virtual-key code that opens/closes the menu (default: Insert).
     int overlayKey = 0x2D;
+    // [Reflex] Mode: 0 = off, 1 = on (low latency), 2 = on + boost. DLSS-G needs Reflex, so while
+    // frame generation runs "off" is applied as "on".
+    int reflexMode = 1;
     // [Overlay] Readout: small always-on corner readout (multiplier, rendered and output fps).
     bool readout = false;
     // [Overlay] ReadoutX / ReadoutY: top-left of the readout in pixels, dragged there in the menu;
     // -1 = default (top-right corner).
+    // [Overlay] ReadoutItems: comma list of fg, output, fps, latency, frametime, reflex.
+    unsigned readoutItems = kReadoutDefault;
     int readoutX = -1;
     int readoutY = -1;
     // [Camera] Source: game = the game's camera read from memory; approx = approximate camera.
@@ -46,8 +63,10 @@ inline bool FrameGenEnabled(const Config& c) { return c.multiplier != 1; }
 void SetMultiplier(int multiplier);  // 1..6 or kMultiplierAuto
 void SetUseGameCamera(bool use);
 void SetOutputCap(int cap);  // 0 = off, -1 = auto, otherwise fps
+void SetReflexMode(int mode);  // 0 = off, 1 = on, 2 = on + boost
 void SetAutoKeep(float keep);
 void SetReadout(bool on);
+void SetReadoutItems(unsigned mask);  // ReadoutItem bits; never empty
 void SetReadoutPos(int x, int y);  // -1, -1 = back to the default corner  // saved only when the rounded value changes
 
 }  // namespace efg

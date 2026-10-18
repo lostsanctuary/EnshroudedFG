@@ -206,7 +206,7 @@ Runtime files: `winmm.dll` and `EnshroudedFG.ini` go next to the exe. The SL DLL
 - **Menu:** the Insert key (`[Overlay] ToggleKey` in the ini) opens an ImGui menu (`src/overlay/overlay.*`) with Off/2x–6x. Options above the GPU maximum are disabled. Changes apply live and are saved to the ini.
 - **Rendering:** ImGui draws into the presented image on our own command buffer, which waits on the game's present semaphores; present then waits on ours. It uses dynamic rendering and push-free descriptors, via ImGui's internal pool.
 - **Input:** the window is subclassed and input is swallowed while the menu is open. `SetCursorPos`/`ClipCursor` are suspended and ImGui draws a software cursor.
-- **FG while open:** frame generation pauses while the menu is open, so the menu is never interpolated.
+- **FG while open:** v0.5 paused frame generation while the menu was open; since v0.8.2 it keeps running, because the menu is drawn after the HUD-less capture and DLSS-G treats it as UI.
 
 **Verified in-game**
 - DLSS-G reported `numFramesActuallyPresented` of **2, 3, 4, 5 and 6** for 2x–6x.
@@ -346,6 +346,33 @@ Streamline's Dynamic MFG is D3D12-only (`bIsDynamicMFGSupported` reads 0 here), 
   - A saved spot is clamped back on screen if the resolution shrinks.
   - With the menu closed it is `NoInputs`.
   - User test: dragging works in-game.
+
+### v0.8.2: themed overlay, Reflex control, counter items (2026-10-18)
+
+**Enshrouded-style theme** (`src/overlay/theme.*`), modelled on the game's settings and character screens:
+- **Surfaces:** indigo gradient panels with a gold hairline frame and diamond corner ornaments, plus a soft drop shadow.
+- **Type:** Palatino Linotype (Georgia/Constantia fallback, loaded at runtime from `C:\Windows\Fonts`, nothing bundled) for body text, spaced capitals for titles.
+- **Controls:** `‹ value ›` stepper rows like the game's settings, big serif stat numbers, white keycap hints.
+- **Scale:** everything scales with output height / 1080.
+
+**Menu (Insert)**
+- Rows: Frame Generation, Output Cap, NVIDIA Reflex, Camera Data, Frame Counter, Counter Shows.
+- Status block: rendered, output, multiplier and latency stats, plus colored status lines.
+- Pitfalls fixed:
+  - `PushTextWrapPos` takes a window-local x.
+  - An item covering a row steals hover and clicks from items placed on top of it, so row hover is a plain rect test.
+
+**Counter:** a miniature of the menu panel: parchment captions, bold serif values, gold diamond separators, and "paused" in muted italics.
+- `[Overlay] ReadoutItems` (fg, output, fps, latency, frametime, reflex) picks the segments.
+- The menu edits it through a themed "Counter Shows" dropdown with diamond check items; at least one item always stays selected.
+
+**FG while the menu is open:** frame generation keeps running. The menu is drawn after the HUD-less capture, so DLSS-G treats it as UI. User test: the menu stays crisp, and changes apply live.
+
+**Reflex:** `[Reflex] Mode` on | boost | off (default on), plus a menu row.
+- DLSS-G needs Reflex, so "off" only applies while FG is off.
+- Mode and the output-cap frame limit go through one `slReflexSetOptions` path.
+- Latency is the average of `gpuRenderEndTime - simStartTime` over Reflex's 64 frame reports, polled every 30 frames while the menu or the counter is visible.
+- User test: 20–40 ms at 6x. Boost changed nothing, as expected when GPU-bound.
 
 ## Key risks
 - **Manual hooking:** SL Vulkan manual hooking is documented as "advanced integration only". Running an injected `sl.interposer` next to the game's own NGX instance is untested, so Phase 3 is the go/no-go gate.

@@ -74,6 +74,8 @@ struct FgStatus {
     double baseFps = 0.0;         // rendered (non-generated) frames per second
     uint32_t refreshHz = 0;       // monitor refresh rate
     double outputCapFps = 0.0;    // output cap applied while frame generation runs (0 = none)
+    int reflexMode = 1;           // Reflex mode in effect: 0 off, 1 on, 2 on + boost
+    double latencyMs = 0.0;       // average render latency from Reflex reports (0 = no data yet)
 };
 FgStatus GetFgStatus();
 

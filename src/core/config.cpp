@@ -107,6 +107,49 @@ void RemoveStrayLines() {
     fclose(f);
 }
 
+int ParseReflex(const std::wstring& s) {
+    if (_wcsicmp(s.c_str(), L"off") == 0) return 0;
+    if (_wcsicmp(s.c_str(), L"boost") == 0) return 2;
+    return 1;  // "on"
+}
+
+const wchar_t* ReflexToString(int mode) { return mode == 0 ? L"off" : (mode == 2 ? L"boost" : L"on"); }
+
+struct ReadoutName {
+    unsigned bit;
+    const wchar_t* name;
+};
+const ReadoutName kReadoutNames[] = {{kReadoutFg, L"fg"},           {kReadoutOutput, L"output"},
+                                     {kReadoutFps, L"fps"},         {kReadoutLatency, L"latency"},
+                                     {kReadoutFrameTime, L"frametime"}, {kReadoutReflex, L"reflex"}};
+
+unsigned ParseReadoutItems(const std::wstring& s) {
+    unsigned mask = 0;
+    size_t pos = 0;
+    while (pos <= s.size()) {
+        size_t end = s.find(L',', pos);
+        std::wstring item = s.substr(pos, end == std::wstring::npos ? std::wstring::npos : end - pos);
+        while (!item.empty() && item.front() == L' ') item.erase(item.begin());
+        while (!item.empty() && item.back() == L' ') item.pop_back();
+        for (const auto& n : kReadoutNames) {
+            if (_wcsicmp(item.c_str(), n.name) == 0) mask |= n.bit;
+        }
+        if (end == std::wstring::npos) break;
+        pos = end + 1;
+    }
+    return mask ? mask : kReadoutDefault;
+}
+
+std::wstring ReadoutItemsToString(unsigned mask) {
+    std::wstring out;
+    for (const auto& n : kReadoutNames) {
+        if (!(mask & n.bit)) continue;
+        if (!out.empty()) out += L",";
+        out += n.name;
+    }
+    return out;
+}
+
 Config& Mutable() {
     static Config cfg = [] {
         Config c;
@@ -115,9 +158,11 @@ Config& Mutable() {
         c.multiplier = ParseMultiplier(ReadOrDefault(L"FrameGen", L"Multiplier", L"2"));
         c.autoKeep = ClampKeep(ToFloat(ReadOrDefault(L"FrameGen", L"AutoKeep", L"0.95"), 0.95f));
         c.outputCap = ParseCap(ReadOrDefault(L"FrameGen", L"OutputCap", L"off"));
+        c.reflexMode = ParseReflex(ReadOrDefault(L"Reflex", L"Mode", L"on"));
         c.presentModeOverride = ParsePresentMode(ReadOrDefault(L"Display", L"PresentMode", L"game"));
         c.overlayKey = ToInt(ReadOrDefault(L"Overlay", L"ToggleKey", L"0x2D"), 0x2D);
         c.readout = ToInt(ReadOrDefault(L"Overlay", L"Readout", L"0"), 0) != 0;
+        c.readoutItems = ParseReadoutItems(ReadOrDefault(L"Overlay", L"ReadoutItems", L"fg,output,fps,latency"));
         c.readoutX = ToInt(ReadOrDefault(L"Overlay", L"ReadoutX", L"-1"), -1);
         c.readoutY = ToInt(ReadOrDefault(L"Overlay", L"ReadoutY", L"-1"), -1);
         if (c.readoutX < 0 || c.readoutY < 0) c.readoutX = c.readoutY = -1;
@@ -161,6 +206,16 @@ void SetAutoKeep(float keep) {
     EFG_LOG("config: auto keep set to %ls (saved)", now.c_str());
 }
 
+void SetReadoutItems(unsigned mask) {
+    Config& c = Mutable();
+    mask &= kReadoutAll;
+    if (!mask || c.readoutItems == mask) return;
+    c.readoutItems = mask;
+    const std::wstring v = ReadoutItemsToString(mask);
+    Write(L"Overlay", L"ReadoutItems", v);
+    EFG_LOG("config: counter shows %ls (saved)", v.c_str());
+}
+
 void SetReadout(bool on) {
     Config& c = Mutable();
     if (c.readout == on) return;
@@ -189,6 +244,15 @@ void SetUseGameCamera(bool use) {
     c.useGameCamera = use;
     Write(L"Camera", L"Source", use ? L"game" : L"approx");
     EFG_LOG("config: camera source set to %s (saved)", use ? "game" : "approx");
+}
+
+void SetReflexMode(int mode) {
+    Config& c = Mutable();
+    mode = mode < 0 ? 0 : (mode > 2 ? 2 : mode);
+    if (c.reflexMode == mode) return;
+    c.reflexMode = mode;
+    Write(L"Reflex", L"Mode", ReflexToString(mode));
+    EFG_LOG("config: Reflex mode set to %ls (saved)", ReflexToString(mode));
 }
 
 void SetOutputCap(int cap) {

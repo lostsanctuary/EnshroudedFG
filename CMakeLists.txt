@@ -50,6 +50,7 @@ add_library(EnshroudedFG SHARED
     src/sl/sl_bridge.cpp
     src/render/copy_pass.cpp
     src/overlay/overlay.cpp
+    src/overlay/theme.cpp
     src/debug/frame_trace.cpp
     ${EFG_SHADER_HEADERS}
     src/hooks/loader_hooks.cpp

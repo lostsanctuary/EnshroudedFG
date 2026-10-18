@@ -44,11 +44,15 @@ In-game menu (Insert)
   using the Reflex frame limiter. Rendering then runs at cap / multiplier, so at high multipliers it
   feels laggier. Usually better: choose the multiplier whose output just reaches your refresh rate
   (the menu shows a tip), e.g. 2x when you render ~140 fps on a 280 Hz display.
+- NVIDIA Reflex: Off / On / On + Boost (default On). Frame generation requires Reflex, so Off only
+  applies while frame generation is off. The menu and the counter show the measured latency
+  (simulation start to GPU render end, from Reflex's own reports).
 - Use game camera data: on by default; off uses an approximate camera (for comparison only).
 - Corner readout (default off): a small always-on line showing the multiplier (e.g. "FG Auto 3x"),
   rendered fps and output fps. It starts in the top-right corner; while the menu is open you can
   drag it anywhere (the spot is saved), and right-clicking it puts it back in the corner.
-Frame generation pauses while the menu is open. All choices are saved to EnshroudedFG.ini.
+Frame generation keeps running while the menu is open, so changes take effect live. All choices are
+saved to EnshroudedFG.ini.
 
 EnshroudedFG.ini (next to enshrouded.exe)
 ------------------------------------------
@@ -56,6 +60,8 @@ EnshroudedFG.ini (next to enshrouded.exe)
 [FrameGen] AutoKeep     0.85 .. 1.0, default 0.95: share of rendered fps Auto expects to keep per extra
                         generated frame. Auto updates it as it learns; delete the line to reset it.
 [FrameGen] OutputCap    off | auto | <fps>
+[Reflex]   Mode         on | boost | off
+[Overlay]  ReadoutItems fg, output, fps, latency, frametime, reflex (what the counter shows)
 [Display]  PresentMode  game | immediate | mailbox | fifo   (applies after restarting the game)
 [Overlay]  ToggleKey    virtual-key code, default 0x2D (Insert)
 [Overlay]  Readout      0 | 1   corner readout (multiplier, rendered fps, output fps)
