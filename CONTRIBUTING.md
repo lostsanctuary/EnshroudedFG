@@ -93,7 +93,7 @@ Before opening a pull request, please check at least:
 
 - **Scope:** keep each pull request to one change, and describe what you tested and on which GPU.
 - **Style:** match the surrounding code (C++20, the existing naming and comment style). New ini keys go in `src/core/config.*` with a default, and are documented in `tools/README.txt` and the README's settings table.
-- **Changelog:** add a line for any user-facing change under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+- **Changelog:** add a line for any user-facing change under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md). The *Changelog* check fails a pull request that changes `src/` without touching that section. If the change isn't user-facing (a refactor, comments), a maintainer adds the `skip-changelog` label instead.
 - **Background:** [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) explains why things are done the way they are: Streamline manual hooking, the NGX hooks, HUD-less capture and the camera signatures. Read the relevant part before changing those areas.
 - **Licence:** contributions are accepted under the project's [MIT licence](LICENSE).
 

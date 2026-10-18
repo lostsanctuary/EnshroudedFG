@@ -1,0 +1,29 @@
+name: Changelog
+
+# Pull requests that change src/ must update the [Unreleased] section of CHANGELOG.md.
+# Label a PR "skip-changelog" when its src/ change isn't user-facing (refactors, comments).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skipped by label
+        if: contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+        run: echo "The skip-changelog label is set - not checking CHANGELOG.md."
+
+      - uses: actions/checkout@v7
+        if: "!contains(github.event.pull_request.labels.*.name, 'skip-changelog')"
+        with:
+          fetch-depth: 0
+
+      - name: Check CHANGELOG.md [Unreleased]
+        if: "!contains(github.event.pull_request.labels.*.name, 'skip-changelog')"
+        run: >-
+          python3 -I tools/check_pr_changelog.py
+          ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
