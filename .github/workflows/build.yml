@@ -7,9 +7,6 @@ on:
 permissions:
   contents: read
 
-env:
-  VULKAN_SDK_VERSION: 1.4.363.0
-
 jobs:
   build:
     runs-on: windows-latest
@@ -18,33 +15,7 @@ jobs:
         with:
           submodules: recursive
 
-      # The Vulkan SDK provides the Vulkan headers and glslc for the compute shaders.
-      - name: Cache Vulkan SDK
-        id: vulkan-cache
-        uses: actions/cache@v6
-        with:
-          path: C:\VulkanSDK\${{ env.VULKAN_SDK_VERSION }}
-          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}
-
-      - name: Install Vulkan SDK
-        if: steps.vulkan-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          $v = $env:VULKAN_SDK_VERSION
-          $installer = Join-Path $env:RUNNER_TEMP "vulkansdk.exe"
-          Invoke-WebRequest -UseBasicParsing -OutFile $installer `
-            "https://sdk.lunarg.com/sdk/download/$v/windows/vulkansdk-windows-X64-$v.exe"
-          # The installer is a GUI program, so wait for it explicitly.
-          $p = Start-Process $installer -Wait -PassThru -ArgumentList `
-            "--root", "C:\VulkanSDK\$v", "--accept-licenses", "--default-answer", "--confirm-command", "install"
-          if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer failed ($($p.ExitCode))" }
-
-      - name: Set VULKAN_SDK
-        shell: pwsh
-        run: |
-          $sdk = "C:\VulkanSDK\$env:VULKAN_SDK_VERSION"
-          if (-not (Test-Path "$sdk\Bin\glslc.exe")) { throw "glslc not found in $sdk" }
-          "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV
+      - uses: ./.github/actions/setup-vulkan-sdk
 
       # NGX headers only: building needs no Streamline DLLs.
       - name: Fetch NVIDIA headers

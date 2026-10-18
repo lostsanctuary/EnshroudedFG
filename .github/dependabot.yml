@@ -1,8 +1,10 @@
 version: 2
 updates:
-  # actions/checkout, actions/cache, actions/upload-artifact in .github/workflows
+  # actions/checkout, actions/cache, actions/upload-artifact in .github/workflows and .github/actions
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     commit-message:

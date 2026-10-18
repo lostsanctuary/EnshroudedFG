@@ -1,0 +1,39 @@
+name: Set up Vulkan SDK
+description: Installs (and caches) the LunarG Vulkan SDK and sets VULKAN_SDK. Provides the Vulkan headers and glslc.
+inputs:
+  version:
+    description: Vulkan SDK version
+    default: 1.4.363.0
+runs:
+  using: composite
+  steps:
+    - name: Cache Vulkan SDK
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: C:\VulkanSDK\${{ inputs.version }}
+        key: vulkan-sdk-${{ inputs.version }}
+
+    - name: Install Vulkan SDK
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      env:
+        VULKAN_SDK_VERSION: ${{ inputs.version }}
+      run: |
+        $v = $env:VULKAN_SDK_VERSION
+        $installer = Join-Path $env:RUNNER_TEMP "vulkansdk.exe"
+        Invoke-WebRequest -UseBasicParsing -OutFile $installer `
+          "https://sdk.lunarg.com/sdk/download/$v/windows/vulkansdk-windows-X64-$v.exe"
+        # The installer is a GUI program, so wait for it explicitly.
+        $p = Start-Process $installer -Wait -PassThru -ArgumentList `
+          "--root", "C:\VulkanSDK\$v", "--accept-licenses", "--default-answer", "--confirm-command", "install"
+        if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer failed ($($p.ExitCode))" }
+
+    - name: Set VULKAN_SDK
+      shell: pwsh
+      env:
+        VULKAN_SDK_VERSION: ${{ inputs.version }}
+      run: |
+        $sdk = "C:\VulkanSDK\$env:VULKAN_SDK_VERSION"
+        if (-not (Test-Path "$sdk\Bin\glslc.exe")) { throw "glslc not found in $sdk" }
+        "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV

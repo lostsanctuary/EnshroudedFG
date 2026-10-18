@@ -1,0 +1,82 @@
+name: Release
+
+# Pushing a tag like v0.8.4 builds the mod, packages EnshroudedFG-<version>.zip with tools/package.ps1
+# and attaches it to the GitHub release for that tag. The tag must match EFG_VERSION_STRING in
+# src/version.h. If the release doesn't exist yet, a draft is created for you to add notes and
+# publish; if it does, the zip is uploaded to it (replacing an older copy).
+# Run it by hand (Actions > Release > Run workflow) to build the zip as an artifact without releasing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $m = Select-String -Path src/version.h -Pattern 'EFG_VERSION_STRING "([^"]+)"'
+          if (-not $m) { throw "EFG_VERSION_STRING not found in src/version.h" }
+          $version = $m.Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME doesn't match src/version.h ($version). Bump the version or fix the tag."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - uses: ./.github/actions/setup-vulkan-sdk
+
+      # The Streamline SDK zip is ~265 MB; keep the extracted DLLs between runs.
+      - name: Cache Streamline DLLs
+        uses: actions/cache@v6
+        with:
+          path: external/streamline/bin/x64
+          key: streamline-${{ hashFiles('tools/fetch_deps.ps1') }}
+
+      - name: Fetch NVIDIA headers and Streamline DLLs
+        shell: powershell
+        run: ./tools/fetch_deps.ps1
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      # Also checks that every NVIDIA DLL in the package is validly signed.
+      - name: Package
+        shell: powershell  # Windows PowerShell 5.1, which the tools/*.ps1 scripts are written for
+        run: ./tools/package.ps1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: EnshroudedFG-${{ steps.version.outputs.version }}
+          path: dist/EnshroudedFG-${{ steps.version.outputs.version }}.zip
+          if-no-files-found: error
+
+      - name: Attach to GitHub release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP: dist/EnshroudedFG-${{ steps.version.outputs.version }}.zip
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $env:ZIP --clobber
+            Write-Host "Uploaded $env:ZIP to the existing release $tag"
+          } else {
+            gh release create $tag $env:ZIP --draft --verify-tag --title "EnshroudedFG $tag" --generate-notes
+            Write-Host "Created draft release $tag - add notes and publish it on GitHub"
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release failed ($LASTEXITCODE)" }
