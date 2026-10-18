@@ -1,0 +1,64 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  VULKAN_SDK_VERSION: 1.4.363.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # The Vulkan SDK provides the Vulkan headers and glslc for the compute shaders.
+      - name: Cache Vulkan SDK
+        id: vulkan-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\VulkanSDK\${{ env.VULKAN_SDK_VERSION }}
+          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}
+
+      - name: Install Vulkan SDK
+        if: steps.vulkan-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $v = $env:VULKAN_SDK_VERSION
+          $installer = Join-Path $env:RUNNER_TEMP "vulkansdk.exe"
+          Invoke-WebRequest -UseBasicParsing -OutFile $installer `
+            "https://sdk.lunarg.com/sdk/download/$v/windows/vulkansdk-windows-X64-$v.exe"
+          # The installer is a GUI program, so wait for it explicitly.
+          $p = Start-Process $installer -Wait -PassThru -ArgumentList `
+            "--root", "C:\VulkanSDK\$v", "--accept-licenses", "--default-answer", "--confirm-command", "install"
+          if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer failed ($($p.ExitCode))" }
+
+      - name: Set VULKAN_SDK
+        shell: pwsh
+        run: |
+          $sdk = "C:\VulkanSDK\$env:VULKAN_SDK_VERSION"
+          if (-not (Test-Path "$sdk\Bin\glslc.exe")) { throw "glslc not found in $sdk" }
+          "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV
+
+      # NGX headers only: building needs no Streamline DLLs.
+      - name: Fetch NVIDIA headers
+        shell: pwsh
+        run: ./tools/fetch_deps.ps1 -SkipStreamline
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winmm-${{ github.sha }}
+          path: build/Release/winmm.dll
+          if-no-files-found: error
