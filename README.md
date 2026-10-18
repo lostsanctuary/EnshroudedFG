@@ -1,6 +1,6 @@
 # EnshroudedFG
 
-[![Build](https://github.com/lostsanctuary/EnshroudedFG/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/lostsanctuary/EnshroudedFG/actions/workflows/build.yml)
+[![Build](https://github.com/lostsanctuary/EnshroudedFG/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/lostsanctuary/EnshroudedFG/actions/workflows/build.yml) [![Changelog](https://github.com/lostsanctuary/EnshroudedFG/actions/workflows/changelog.yml/badge.svg?event=pull_request)](https://github.com/lostsanctuary/EnshroudedFG/actions/workflows/changelog.yml)
 
 NVIDIA DLSS Frame Generation and Multi Frame Generation (2x–6x) for **Enshrouded** (Vulkan), switchable in game.
 
