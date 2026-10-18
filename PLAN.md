@@ -374,6 +374,23 @@ Streamline's Dynamic MFG is D3D12-only (`bIsDynamicMFGSupported` reads 0 here), 
 - Latency is the average of `gpuRenderEndTime - simStartTime` over Reflex's 64 frame reports, polled every 30 frames while the menu or the counter is visible.
 - User test: 20–40 ms at 6x. Boost changed nothing, as expected when GPU-bound.
 
+### v0.8.3: counter size and opacity (2026-10-18)
+
+**Counter size** (commit 1f57288)
+- `[Overlay] ReadoutSize` = small | medium | large (default medium) scales the whole counter plate: 0.8×, 1× or 1.3×.
+- Inside `DrawReadout`, every metric goes through `Z(px)`, which is `theme::S(px × ReadoutScale(size))`.
+- Menu: a "Counter Size" stepper row. User test: works in-game.
+
+**Counter opacity** (commit 89dcd43)
+- `[Overlay] ReadoutOpacity` = 20..100 percent (default 100) fades the whole counter, plate and text alike.
+- After drawing, the alpha of every draw-list vertex the counter added is scaled.
+- Menu: a "Counter Opacity" stepper row in 10% steps. User test: works in-game.
+
+**DLSS 5 (3D-Guided Neural Rendering) is not integrated.**
+- The Streamline 2.14 changelog lists an `sl.dlss_nr` plugin (`kFeatureDLSS_NR` = 1004), but the public 2.14.16 SDK ships no header, docs or binaries for it.
+- The community route uses a DLL leaked from NBA 2K27's early access, which we will not build on.
+- Revisit when NVIDIA publishes the plugin. Check Vulkan support and the frame cost (reported ~90 → 50 fps on an RTX 5090 at 4K).
+
 ## Key risks
 - **Manual hooking:** SL Vulkan manual hooking is documented as "advanced integration only". Running an injected `sl.interposer` next to the game's own NGX instance is untested, so Phase 3 is the go/no-go gate.
 - **Camera matrices:** the approximation may not be good enough, and step B is a reverse-engineering effort of unknown size.
