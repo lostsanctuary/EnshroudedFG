@@ -603,7 +603,7 @@ void DrawReadout(bool movable) {
                                 th::col::kPanelBottom);
     const float in = Z(3);
     const ImU32 frame = movable ? th::col::kGold : th::col::kGoldDim;
-    dl->AddRect(ImVec2(a.x + in, a.y + in), ImVec2(b.x - in, b.y - in), frame, 0.0f, 0, Z(1));
+    dl->AddRect(ImVec2(a.x + in, a.y + in), ImVec2(b.x - in, b.y - in), frame, 0.0f, Z(1));
     const float cy = (a.y + b.y) * 0.5f;
     for (float ex : {a.x + in, b.x - in}) {
         th::Diamond(dl, ImVec2(ex, cy), Z(5.0f), th::col::kGold);
