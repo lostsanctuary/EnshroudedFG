@@ -403,7 +403,27 @@ Streamline's Dynamic MFG is D3D12-only (`bIsDynamicMFGSupported` reads 0 here), 
 - The Vulkan SDK setup is shared in `.github/actions/setup-vulkan-sdk`.
 - Dependabot watches the workflow actions and the minhook/imgui submodules.
 
-## Key risks
+### Queue parallelism (after v0.8.4, 2026-10-18)
+
+**Why:** almost all of frame generation's cost is DLSS-G itself, not the mod. The mod's own copy passes take well under 0.1 ms. But Streamline's default `eBlockPresentingClientQueue` blocks the game's queue until DLSS-G is done, so the game's next frame and the generated frames ran one after the other.
+
+**What changed:** `[FrameGen] QueueParallelism = parallel`, now the default, passes `DLSSGQueueParallelismMode::eBlockNoClientQueues` (Vulkan only).
+- **Copies:** DLSS-G may still read its inputs while the game renders the next frame. So depth (new `copy_r32.comp` compute copy to R32F; the game alternates D32_SFLOAT and R32_SFLOAT depth images), motion vectors (always copied in this mode) and HUD-less colour all go into 3-slot rings in `CopyPass`.
+- **Fence:** after each present, `slDLSSGGetState` gives `inputsProcessingCompletionFence` (a timeline semaphore) and `lastPresentInputsProcessingCompletionFenceValue`. `CopyPass::MarkPresented` stores the value on the slots that frame wrote.
+- **The wait:** before a slot is rewritten, `CopyPass::Copy` waits for that value on the CPU (`vkWaitSemaphores`, 1 s timeout). The command buffer is submitted later, so this orders the rewrite after DLSS-G's reads.
+- **Fallbacks:** if a copy pass or the semaphore functions are missing, the mod falls back to `block`. A frame whose copy fails isn't tagged, rather than handing DLSS-G the game's own images.
+
+**Results (RTX 5090, 1080p DLSS Quality):**
+
+| | 2x | 6x |
+|---|---|---|
+| block | 130 fps | 93 fps |
+| parallel | 135 fps | 115 fps |
+
+That's +4% at 2x and +24% at 6x, about 2.1 ms per frame at 6x.
+- **Log:** over about 3 minutes at 2x–6x, 4 fence waits (all in the first frames) and 0 timeouts.
+- **User test:** image quality and latency were unchanged.
+
 - **Manual hooking:** SL Vulkan manual hooking is documented as "advanced integration only". Running an injected `sl.interposer` next to the game's own NGX instance is untested, so Phase 3 is the go/no-go gate.
 - **Camera matrices:** the approximation may not be good enough, and step B is a reverse-engineering effort of unknown size.
 - **Latency at high multipliers:** the community already reports this for 4x–6x. Reflex has to be correctly wired through SL.

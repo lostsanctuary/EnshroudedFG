@@ -28,6 +28,7 @@
 #include "overlay/overlay.h"
 #include "hooks/hooks.h"
 #include "render/copy_pass.h"
+#include "render/copy_r32_spv.h"
 #include "render/copy_rgba8_spv.h"
 #include "render/mv_convert_spv.h"
 
@@ -64,8 +65,18 @@ DeviceProxies g_proxies{};
 VkPhysicalDevice g_physicalDevice = VK_NULL_HANDLE;
 render::CopyPass g_mvCopy;       // R16G16_SNORM motion vectors -> RG16F
 render::CopyPass g_hudlessCopy;  // swapchain image before the HUD pass -> RGBA8 HUD-less colour
+render::CopyPass g_depthCopy;    // game depth -> R32F (parallel mode only)
 bool g_copyPassesTried = false;
 PFN_vkCmdPipelineBarrier p_CmdPipelineBarrier = nullptr;
+
+// [FrameGen] QueueParallelism=parallel: Streamline's eBlockNoClientQueues. The game's queue is no longer
+// blocked while DLSS-G generates frames, so every tagged input is a copy in a 3-slot ring, and a slot is
+// rewritten only after DLSS-G's inputs-processing fence (a timeline semaphore) has passed its value.
+bool g_parallel = false;  // in effect (requested and all copy passes + semaphore functions available)
+VkSemaphore g_inputsFence = VK_NULL_HANDLE;
+PFN_vkWaitSemaphores p_WaitSemaphores = nullptr;
+PFN_vkGetSemaphoreCounterValue p_GetSemaphoreCounterValue = nullptr;
+uint32_t g_fenceWaits = 0, g_fenceWaitTimeouts = 0;  // since the last periodic log
 
 // Game-facing swapchain images and the game's views of them (to recognise the HUD pass).
 std::mutex g_swapchainMutex;
@@ -453,17 +464,61 @@ sl::Resource MakeResource(const ImageRef& img, VkImageLayout layout = VK_IMAGE_L
     return r;
 }
 
+// Called before a ring slot is rewritten (parallel mode): waits until DLSS-G has consumed that slot.
+void WaitForInputs(uint64_t value) {
+    VkDevice device = g_device.load();
+    if (!device || !g_inputsFence || !p_WaitSemaphores) return;
+    uint64_t current = 0;
+    if (p_GetSemaphoreCounterValue && p_GetSemaphoreCounterValue(device, g_inputsFence, &current) == VK_SUCCESS &&
+        current >= value)
+        return;
+    ++g_fenceWaits;
+    VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    wi.semaphoreCount = 1;
+    wi.pSemaphores = &g_inputsFence;
+    wi.pValues = &value;
+    const VkResult r = p_WaitSemaphores(device, &wi, 1000000000ull);  // 1 s: never hang the game on it
+    if (r != VK_SUCCESS && g_fenceWaitTimeouts++ < 5)
+        EFG_LOG("parallel: wait for DLSS-G inputs fence value %llu -> %d", value, r);
+}
+
 void EnsureCopyPasses() {
     if (g_copyPassesTried) return;
     g_copyPassesTried = true;
     VkDevice device = g_device.load();
     p_CmdPipelineBarrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(RealDeviceProc(device, "vkCmdPipelineBarrier"));
+    const bool wantParallel = LoadConfig().queueParallel;
+    if (wantParallel) {
+        p_WaitSemaphores = reinterpret_cast<PFN_vkWaitSemaphores>(RealDeviceProc(device, "vkWaitSemaphores"));
+        if (!p_WaitSemaphores)
+            p_WaitSemaphores = reinterpret_cast<PFN_vkWaitSemaphores>(RealDeviceProc(device, "vkWaitSemaphoresKHR"));
+        p_GetSemaphoreCounterValue =
+            reinterpret_cast<PFN_vkGetSemaphoreCounterValue>(RealDeviceProc(device, "vkGetSemaphoreCounterValue"));
+        if (!p_GetSemaphoreCounterValue)
+            p_GetSemaphoreCounterValue = reinterpret_cast<PFN_vkGetSemaphoreCounterValue>(
+                RealDeviceProc(device, "vkGetSemaphoreCounterValueKHR"));
+    }
+    const bool fenceFns = p_WaitSemaphores && p_GetSemaphoreCounterValue;
+    const bool ring = wantParallel && fenceFns;
+    const uint32_t slots = ring ? 3 : 2;
+    const render::CopyPass::WaitFn wait = ring ? &WaitForInputs : nullptr;
     if (!g_mvCopy.Init("mvec", g_instance, g_physicalDevice, device, VK_FORMAT_R16G16_SFLOAT, kMvConvertSpv,
-                       sizeof(kMvConvertSpv)))
+                       sizeof(kMvConvertSpv), slots, wait))
         EFG_LOG("motion-vector copy pass unavailable - tagging the game's SNORM motion vectors directly");
     if (!g_hudlessCopy.Init("hudless", g_instance, g_physicalDevice, device, VK_FORMAT_R8G8B8A8_UNORM, kCopyRgba8Spv,
-                            sizeof(kCopyRgba8Spv)))
+                            sizeof(kCopyRgba8Spv), slots, wait))
         EFG_LOG("HUD-less copy pass unavailable - frame generation will run without HUD-less colour");
+    if (ring)
+        g_depthCopy.Init("depth", g_instance, g_physicalDevice, device, VK_FORMAT_R32_SFLOAT, kCopyR32Spv,
+                         sizeof(kCopyR32Spv), slots, wait);
+    // Every tagged input must be our own copy, or the game would overwrite it while DLSS-G reads it.
+    g_parallel = ring && g_mvCopy.Ready() && g_depthCopy.Ready() && g_hudlessCopy.Ready();
+    if (wantParallel)
+        EFG_LOG("queue parallelism: %s (semaphore functions %d, copies: depth %d mvec %d hudless %d)",
+                g_parallel ? "parallel (eBlockNoClientQueues, 3-slot input ring)" : "UNAVAILABLE - using block",
+                fenceFns, g_depthCopy.Ready(), g_mvCopy.Ready(), g_hudlessCopy.Ready());
+    else
+        EFG_LOG("queue parallelism: block (eBlockPresentingClientQueue)");
 }
 
 void TagNull() {
@@ -681,6 +736,8 @@ void SetFrameGeneration(bool on) {
     o.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
     o.numFramesToGenerate = frames;
     o.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
+    o.queueParallelismMode = g_parallel ? sl::DLSSGQueueParallelismMode::eBlockNoClientQueues
+                                        : sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
     o.mvecDepthWidth = g_lastSr.renderW;
     o.mvecDepthHeight = g_lastSr.renderH;
     sl::Result r;
@@ -688,8 +745,8 @@ void SetFrameGeneration(bool on) {
         SlCallScope scope;
         r = p_slDLSSGSetOptions(sl::ViewportHandle(0), o);
     }
-    EFG_LOG("frame generation %s (%ux, numFramesToGenerate %u) -> %s", on ? "ON" : "OFF", o.numFramesToGenerate + 1,
-            o.numFramesToGenerate, ResultName(r));
+    EFG_LOG("frame generation %s (%ux, numFramesToGenerate %u, %s queues) -> %s", on ? "ON" : "OFF",
+            o.numFramesToGenerate + 1, o.numFramesToGenerate, g_parallel ? "parallel" : "block", ResultName(r));
     if (r == sl::Result::eOk) {
         g_fgOn = on;
         g_fgFrames = frames;
@@ -877,6 +934,8 @@ void OnDeviceDestroying(VkDevice device) {
     g_initialized.store(false);
     g_mvCopy.Shutdown();
     g_hudlessCopy.Shutdown();
+    g_depthCopy.Shutdown();
+    g_inputsFence = VK_NULL_HANDLE;
 }
 
 bool DeviceActive(VkDevice device) { return device != VK_NULL_HANDLE && device == g_device.load(); }
@@ -899,13 +958,15 @@ void OnSrEvaluate(const SrInputs& in) {
     if (!g_frame || g_frameHasSr) return;  // one set of inputs per frame
     if (!in.depth.image || !in.mvec.image || !in.renderW || !in.renderH) return;
 
-    // Depth and motion vectors are the game's own persistent render-resolution images; they are not
-    // rewritten before this frame's present, so SL may read them in place at present time.
-    // Streamline cannot describe R16G16_SNORM, so those motion vectors are first copied into RG16F.
+    // Block mode: depth and motion vectors are the game's own render-resolution images; Streamline blocks
+    // the game's queue until DLSS-G is done, so SL may read them in place at present time. Streamline
+    // cannot describe R16G16_SNORM, so those motion vectors are first copied into RG16F.
+    // Parallel mode: the game renders its next frame while DLSS-G still reads, so both are copied into
+    // our fence-guarded ring.
     EnsureCopyPasses();
     ImageRef mvecImage = in.mvec;
     VkImageLayout mvecLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    if (in.mvec.format == VK_FORMAT_R16G16_SNORM && g_mvCopy.Ready()) {
+    if ((g_parallel || in.mvec.format == VK_FORMAT_R16G16_SNORM) && g_mvCopy.Ready()) {
         ImageRef converted = g_mvCopy.Copy(in.cmd, in.mvec.view, in.mvec.width, in.mvec.height,
                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         if (converted.image) {
@@ -913,7 +974,21 @@ void OnSrEvaluate(const SrInputs& in) {
             mvecLayout = VK_IMAGE_LAYOUT_GENERAL;
         }
     }
-    sl::Resource depth = MakeResource(in.depth);
+    ImageRef depthImage = in.depth;
+    VkImageLayout depthLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    if (g_parallel) {
+        ImageRef copied = g_depthCopy.Copy(in.cmd, in.depth.view, in.depth.width, in.depth.height,
+                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (copied.image) {
+            depthImage = copied;
+            depthLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+        // Never hand DLSS-G the game's own images in this mode; skip the frame instead (FG pauses).
+        if (!copied.image || mvecLayout != VK_IMAGE_LAYOUT_GENERAL) return;
+    }
+    sl::Resource depth = MakeResource(depthImage, depthLayout);
+    if (depthLayout == VK_IMAGE_LAYOUT_GENERAL)
+        depth.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     sl::Resource mvec = MakeResource(mvecImage, mvecLayout);
     mvec.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     sl::Extent extent{0, 0, in.renderW, in.renderH};
@@ -949,7 +1024,7 @@ void OnSrEvaluate(const SrInputs& in) {
         if (logBudget > 0) --logBudget;
         EFG_LOG("frame %u: tagged depth %p (fmt %d) + mvec %p (fmt %d) %ux%u -> %s; constants jitter (%.3f, %.3f) "
                 "mvecScale (%.3f, %.3f) depthInverted %d reset %d -> %s",
-                (uint32_t)*g_frame, (void*)in.depth.image, in.depth.format, (void*)mvecImage.image, mvecImage.format,
+                (uint32_t)*g_frame, (void*)depthImage.image, depthImage.format, (void*)mvecImage.image, mvecImage.format,
                 in.renderW, in.renderH, ResultName(rt), in.jitterX, in.jitterY, c.mvecScale.x, c.mvecScale.y,
                 in.depthInverted, in.reset, ResultName(rc));
     }
@@ -975,8 +1050,37 @@ void BeforePresent() {
     Marker(sl::PCLMarker::ePresentStart);
 }
 
+// Parallel mode: after each present, record DLSS-G's inputs-processing fence value on the ring slots
+// this frame wrote, so they are not rewritten before DLSS-G has read them. Must run on the present thread.
+void TrackInputsFence(bool frameTagged) {
+    uint64_t value = 0;
+    if (frameTagged && g_fgOn && p_slDLSSGGetState) {
+        sl::DLSSGState st{};
+        sl::Result r;
+        {
+            SlCallScope scope;
+            r = p_slDLSSGGetState(sl::ViewportHandle(0), st, nullptr);
+        }
+        if (r == sl::Result::eOk && st.inputsProcessingCompletionFence) {
+            VkSemaphore fence = reinterpret_cast<VkSemaphore>(st.inputsProcessingCompletionFence);
+            if (fence != g_inputsFence) {
+                uint64_t current = 0;
+                const VkResult vr = p_GetSemaphoreCounterValue(g_device.load(), fence, &current);
+                EFG_LOG("parallel: DLSS-G inputs fence %p (counter %llu, -> %d), first value %llu", (void*)fence,
+                        current, vr, st.lastPresentInputsProcessingCompletionFenceValue);
+                g_inputsFence = fence;
+            }
+            value = st.lastPresentInputsProcessingCompletionFenceValue;
+        }
+    }
+    g_depthCopy.MarkPresented(value);
+    g_mvCopy.MarkPresented(value);
+    g_hudlessCopy.MarkPresented(value);
+}
+
 void AfterPresent(unsigned long long presentCount) {
     Marker(sl::PCLMarker::ePresentEnd);
+    if (g_parallel) TrackInputsFence(g_frameHasSr);
     g_srStreak = g_frameHasSr ? g_srStreak + 1 : 0;
     g_frameHasSr = false;
     g_hudlessTagged = false;
@@ -1020,6 +1124,10 @@ void AfterPresent(unsigned long long presentCount) {
             g_camMaxStep = 0;
         }
         if (presentCount == 2 || presentCount % 6000 == 0) LogReflexState("periodic");
+        if (g_parallel) {
+            EFG_LOG("parallel: %u fence waits, %u timeouts in the last 600 frames", g_fenceWaits, g_fenceWaitTimeouts);
+            g_fenceWaits = g_fenceWaitTimeouts = 0;
+        }
     }
     BeginFrame();  // next frame's simulation starts now (Reflex sleep happens here)
 }

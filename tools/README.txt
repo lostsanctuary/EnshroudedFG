@@ -61,6 +61,10 @@ EnshroudedFG.ini (next to enshrouded.exe)
 [FrameGen] AutoKeep     0.85 .. 1.0, default 0.95: share of rendered fps Auto expects to keep per extra
                         generated frame. Auto updates it as it learns; delete the line to reset it.
 [FrameGen] OutputCap    off | auto | <fps>
+[FrameGen] QueueParallelism  parallel | block (default parallel; applies after restarting the game):
+                        parallel lets the game render its next frame while DLSS-G still generates frames,
+                        which raises rendered fps most at high multipliers. block is the old behaviour,
+                        kept as a fallback if you see artifacts or instability
 [Reflex]   Mode         on | boost | off
 [Overlay]  ReadoutItems fg, output, fps, latency, frametime, reflex (what the counter shows)
 [Overlay]  ReadoutSize  small | medium | large
