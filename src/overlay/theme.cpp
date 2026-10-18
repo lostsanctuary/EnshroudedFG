@@ -40,6 +40,14 @@ ImFont* LoadFirst(std::initializer_list<const char*> files, const char* role) {
 
 ImVec4 V(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
 
+// Solid rectangle with its edges snapped to whole pixels. Since ImGui 1.93, AddRectFilled()
+// anti-aliases edges at fractional coordinates; the theme's 1 px gold rules and row edges would
+// turn soft. Snapping keeps the crisp edges the old (non-AA) path gave.
+void FillRect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color) {
+    auto snap = [](float v) { return std::floor(v + 0.5f); };
+    dl->AddRectFilled(ImVec2(snap(a.x), snap(a.y)), ImVec2(snap(b.x), snap(b.y)), color);
+}
+
 void ApplyColors(ImGuiStyle& s) {
     ImVec4* c = s.Colors;
     c[ImGuiCol_Text] = V(col::kText);
@@ -127,7 +135,7 @@ void GoldRule(ImDrawList* dl, float x0, float x1, float y, bool centerDiamond) {
     const ImU32 clear = col::kGold & 0x00FFFFFF;
     const float t = S(1.0f);
     dl->AddRectFilledMultiColor(ImVec2(x0, y), ImVec2(x0 + fade, y + t), clear, col::kGold, col::kGold, clear);
-    dl->AddRectFilled(ImVec2(x0 + fade, y), ImVec2(x1 - fade, y + t), col::kGold);
+    FillRect(dl, ImVec2(x0 + fade, y), ImVec2(x1 - fade, y + t), col::kGold);
     dl->AddRectFilledMultiColor(ImVec2(x1 - fade, y), ImVec2(x1, y + t), col::kGold, clear, clear, col::kGold);
     if (centerDiamond) {
         const ImVec2 c((x0 + x1) * 0.5f, y + t * 0.5f);
@@ -145,10 +153,10 @@ void PanelChrome(ImDrawList* dl, ImVec2 a, ImVec2 b) {
     }
     dl->AddRectFilledMultiColor(a, b, col::kPanelTop, col::kPanelTop, col::kPanelBottom, col::kPanelBottom);
     // Outer hairline and an inset gold frame, like the game's item panels.
-    dl->AddRect(a, b, IM_COL32(12, 13, 24, 200), 0.0f, 0, S(1.0f));
+    dl->AddRect(a, b, IM_COL32(12, 13, 24, 200), 0.0f, S(1.0f));
     const float in = S(6.0f);
     const ImVec2 ia(a.x + in, a.y + in), ib(b.x - in, b.y - in);
-    dl->AddRect(ia, ib, col::kGoldDim, 0.0f, 0, S(1.0f));
+    dl->AddRect(ia, ib, col::kGoldDim, 0.0f, S(1.0f));
     // Corner ornaments: a gold diamond with a short flourish along each edge.
     const ImVec2 corners[4] = {ia, ImVec2(ib.x, ia.y), ib, ImVec2(ia.x, ib.y)};
     for (int i = 0; i < 4; ++i) {
@@ -221,7 +229,7 @@ void Chevron(ImDrawList* dl, ImVec2 c, float h, bool left, ImU32 color) {
     const float dir = left ? -1.0f : 1.0f;
     const ImVec2 pts[3] = {ImVec2(c.x - dir * w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + dir * w * 0.5f, c.y),
                            ImVec2(c.x - dir * w * 0.5f, c.y + h * 0.5f)};
-    dl->AddPolyline(pts, 3, color, 0, S(2.2f));
+    dl->AddPolyline(pts, 3, color, S(2.2f));
 }
 }  // namespace
 
@@ -238,9 +246,9 @@ int StepperRow(const char* id, const char* label, const char* value, bool canPre
     // Row hover is a plain rectangle test: an item covering the row would take the hover (and the
     // clicks) away from the arrow / value buttons placed on top of it.
     const bool rowHovered = enabled && ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(a, b);
-    dl->AddRectFilled(a, b, rowHovered ? col::kRowHover : (rowIndex % 2 ? col::kRowAlt : col::kRow));
+    FillRect(dl, a, b, rowHovered ? col::kRowHover : (rowIndex % 2 ? col::kRowAlt : col::kRow));
     dl->AddLine(ImVec2(a.x, b.y - S(1)), ImVec2(b.x, b.y - S(1)), col::kRowSeparator, S(2));
-    if (rowHovered) dl->AddRectFilled(a, ImVec2(a.x + S(3), b.y), col::kGold);  // selection accent
+    if (rowHovered) FillRect(dl, a, ImVec2(a.x + S(3), b.y), col::kGold);  // selection accent
 
     ImFont* serif = g_fonts.serif ? g_fonts.serif : ImGui::GetFont();
     ImFont* bold = g_fonts.serifBold ? g_fonts.serifBold : ImGui::GetFont();
@@ -296,9 +304,9 @@ bool DropdownRow(const char* id, const char* label, const char* preview, int row
     const bool open = ImGui::IsPopupOpen("list");
 
     const bool rowHovered = enabled && ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(a, b);
-    dl->AddRectFilled(a, b, rowHovered || open ? col::kRowHover : (rowIndex % 2 ? col::kRowAlt : col::kRow));
+    FillRect(dl, a, b, rowHovered || open ? col::kRowHover : (rowIndex % 2 ? col::kRowAlt : col::kRow));
     dl->AddLine(ImVec2(a.x, b.y - S(1)), ImVec2(b.x, b.y - S(1)), col::kRowSeparator, S(2));
-    if (rowHovered || open) dl->AddRectFilled(a, ImVec2(a.x + S(3), b.y), col::kGold);
+    if (rowHovered || open) FillRect(dl, a, ImVec2(a.x + S(3), b.y), col::kGold);
 
     ImFont* serif = g_fonts.serif ? g_fonts.serif : ImGui::GetFont();
     ImFont* bold = g_fonts.serifBold ? g_fonts.serifBold : ImGui::GetFont();
@@ -322,7 +330,7 @@ bool DropdownRow(const char* id, const char* label, const char* preview, int row
         const float dir = open ? -1.0f : 1.0f;
         const ImVec2 pts[3] = {ImVec2(sx1 + S(10) - cw, cy - dir * ch), ImVec2(sx1 + S(10), cy + dir * ch),
                                ImVec2(sx1 + S(10) + cw, cy - dir * ch)};
-        dl->AddPolyline(pts, 3, enabled ? (valueHover || open ? col::kGold : col::kText) : col::kTextMuted, 0, S(2.2f));
+        dl->AddPolyline(pts, 3, enabled ? (valueHover || open ? col::kGold : col::kText) : col::kTextMuted, S(2.2f));
     }
     if (tooltip && rowHovered && !open) ImGui::SetTooltip("%s", tooltip);
     ImGui::SetCursorScreenPos(ImVec2(ImGui::GetWindowPos().x, b.y));
@@ -356,12 +364,13 @@ bool DropdownCheck(const char* label, bool* checked, bool canToggle) {
         *checked = !*checked;
         changed = true;
     }
-    if (hover) dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col::kRowHover);
+    if (hover) FillRect(dl, p, ImVec2(p.x + w, p.y + h), col::kRowHover);
     // Diamond check box: gold outline, filled when checked.
     const ImVec2 c(p.x + S(20), p.y + h * 0.5f);
     const float r = S(7.5f);
     const ImU32 boxCol = canToggle ? col::kGold : col::kGoldDim;
-    dl->AddQuad(ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r), ImVec2(c.x - r, c.y), boxCol, S(1.5f));
+    dl->AddQuad(ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r), ImVec2(c.x - r, c.y), boxCol, S(1.5f),
+                ImDrawFlags_StrokeCenter);
     if (*checked) Diamond(dl, c, r * 0.55f, boxCol);
     ImFont* serif = g_fonts.serif ? g_fonts.serif : ImGui::GetFont();
     const float ts = S(kBody);
