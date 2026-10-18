@@ -17,6 +17,7 @@ These changes are for contributors and maintainers. The mod itself is unchanged 
 - **Branch protection:** `main` only accepts changes through pull requests that pass the `build` and `changelog` checks, for maintainers too. Force-pushes and deleting `main` are blocked.
 - **CODEOWNERS:** @lostsanctuary is the code owner of the whole repository and is asked to review pull requests from other contributors.
 - **Dependabot auto-merge:** Dependabot pull requests that only bump GitHub Actions merge by themselves once `build` and `changelog` pass. Submodule bumps (minhook, imgui) still need a person, because they change the mod and need testing in game.
+- **Branch cleanup script:** `tools/prune_branches.ps1` deletes local branches whose GitHub branch was deleted after the pull request merged.
 
 ## [0.8.4] - 2026-10-18
 

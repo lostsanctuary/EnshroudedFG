@@ -96,6 +96,12 @@ Before opening a pull request, please check at least:
 - **Changelog:** add a line for any user-facing change under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md). The *Changelog* check fails a pull request that changes `src/` without touching that section. If the change isn't user-facing (a refactor, comments), a maintainer adds the `skip-changelog` label instead.
 - **Background:** [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) explains why things are done the way they are: Streamline manual hooking, the NGX hooks, HUD-less capture and the camera signatures. Read the relevant part before changing those areas.
 - **Licence:** contributions are accepted under the project's [MIT licence](LICENSE).
+- **After merging:** GitHub deletes the pull request's branch on GitHub, but your local copy stays. To delete every local branch whose GitHub branch is gone, run:
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File tools\prune_branches.ps1 -DryRun   # list what would go
+  powershell -ExecutionPolicy Bypass -File tools\prune_branches.ps1           # delete them
+  ```
+  It runs `git fetch --prune` first and only deletes branches whose upstream is reported as `[gone]`. Branches that were never pushed, and the branch you're on, are left alone. Squash merges keep a branch's own commits out of `main`'s history, so it deletes with `git branch -D`. Check with `-DryRun` first if you're unsure.
 
 ## Making a release
 
