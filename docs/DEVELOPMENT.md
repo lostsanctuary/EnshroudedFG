@@ -382,6 +382,27 @@ Streamline's Dynamic MFG is D3D12-only (`bIsDynamicMFGSupported` reads 0 here), 
 - The community route uses a DLL leaked from NBA 2K27's early access, which we will not build on.
 - Revisit when NVIDIA publishes the plugin. Check Vulkan support and the frame cost (reported ~90 → 50 fps on an RTX 5090 at 4K).
 
+### v0.8.4: ImGui 1.93, public repository, CI and releases (2026-10-18)
+
+**Dear ImGui 1.92.4 → 1.93.0** (PR #1, squash-merged as 663c2a5)
+- 1.93 removed the `AddRect` / `AddPolyline` overloads that took `ImDrawFlags` before the thickness. Because the build defines `IMGUI_DISABLE_OBSOLETE_FUNCTIONS`, they became deleted functions, so the calls in `overlay.cpp` and `theme.cpp` were updated.
+- Since 1.93, `AddRectFilled` anti-aliases edges at fractional coordinates, which softened the theme's 1 px gold rules and row edges. A `FillRect` helper in `theme.cpp` snaps rectangle edges to whole pixels, which keeps the old crisp look.
+- The diamond check box in the dropdown uses `ImDrawFlags_StrokeCenter`, so its outline sits where it did before.
+- User test: the menu, the dropdown and the counter look and work as before in game.
+
+**Public repository**
+- MIT licence, README, third-party notices, CONTRIBUTING, SECURITY and CODE_OF_CONDUCT; issue forms and a pull request template.
+- The history was rewritten so that NVIDIA's NGX headers aren't in any commit.
+- `tools/fetch_deps.ps1` downloads the headers (NVIDIA/DLSS, pinned commit) and the Streamline 2.14.16 production DLLs.
+- `install.ps1` and `uninstall.ps1` find the game through the Steam library folders; `-GameDir` still overrides.
+- The release zip now also contains the project licence.
+
+**CI**
+- `build.yml` builds `winmm.dll` on every push and pull request.
+- `release.yml` runs on `v*` tags: it checks that the tag matches `src/version.h`, then builds, packages and attaches the zip to the tag's release, creating a draft if needed.
+- The Vulkan SDK setup is shared in `.github/actions/setup-vulkan-sdk`.
+- Dependabot watches the workflow actions and the minhook/imgui submodules.
+
 ## Key risks
 - **Manual hooking:** SL Vulkan manual hooking is documented as "advanced integration only". Running an injected `sl.interposer` next to the game's own NGX instance is untested, so Phase 3 is the go/no-go gate.
 - **Camera matrices:** the approximation may not be good enough, and step B is a reverse-engineering effort of unknown size.
