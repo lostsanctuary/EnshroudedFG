@@ -1,6 +1,9 @@
 /build/
 /backup/
+/dist/
 *.user
 .vs/
+__pycache__/
+# NVIDIA files fetched by tools/fetch_deps.ps1
+/external/ngx/include/
 /external/streamline/bin/
-/dist/

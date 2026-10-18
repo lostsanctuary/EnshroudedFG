@@ -18,7 +18,8 @@ Install
 -------
 1. Close the game.
 2. Copy the CONTENTS of this folder into the game folder, e.g.
-     F:\SteamLibrary\steamapps\common\Enshrouded\
+     C:\Program Files (x86)\Steam\steamapps\common\Enshrouded\
+   (in Steam: right-click Enshrouded > Manage > Browse local files)
    so that winmm.dll sits next to enshrouded.exe and the EnshroudedFG\ folder is created there.
 3. Start the game through Steam, load into the world and press Insert.
 

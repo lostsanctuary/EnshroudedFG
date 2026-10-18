@@ -21,6 +21,7 @@ New-Item -ItemType Directory -Force $licDst | Out-Null
 
 Copy-Item $dll $stage
 Copy-Item (Join-Path $root "tools\README.txt") $stage
+Copy-Item (Join-Path $root "LICENSE") (Join-Path $licDst "EnshroudedFG-LICENSE.txt")
 foreach ($f in "sl.interposer.dll", "sl.common.dll", "sl.dlss_g.dll", "sl.reflex.dll", "sl.pcl.dll",
                "nvngx_dlssg.dll", "NvLowLatencyVk.dll") {
     Copy-Item (Join-Path $slBin $f) $slDst

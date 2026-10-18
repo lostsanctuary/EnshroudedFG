@@ -1,16 +1,15 @@
-# Plan: Inject DLSS Multi Frame Generation (Off / 2x–6x) into Enshrouded
+# Development log: DLSS Multi Frame Generation (Off / 2x–6x) for Enshrouded
+
+This is the original plan and the working notes kept while building the mod, phase by phase. It records what was tried, what the game and Streamline actually do, and why the code looks the way it does. For using or building the mod, see the [README](../README.md).
 
 ## Context
 
-Enshrouded 1.0 (Vulkan only, Keen's Holistic engine) has DLSS SR/DLAA and Reflex but no frame generation. ComputerBase's 1.0 test (16 Oct 2026) confirms MFG is not supported. The user has an RTX 5090 and wants real NVIDIA DLSS-G with a selectable multiplier from 2x to 6x, switched from an in-game ImGui overlay.
+Enshrouded 1.0 (Vulkan only, Keen's Holistic engine) has DLSS SR/DLAA and Reflex but no frame generation. ComputerBase's 1.0 test (16 Oct 2026) confirms MFG is not supported. The goal: real NVIDIA DLSS-G with a selectable multiplier from 2x to 6x, switched from an in-game ImGui overlay.
 
-What I found on this machine:
+What the investigation found:
 - **How the game calls DLSS:** `enshrouded.exe` statically links the NGX SDK and calls `NVSDK_NGX_VULKAN_*` directly. It never references Streamline, and the crash-dump module list shows no `sl.*` DLL loaded. That NGX call is our input tap: depth, motion vectors, jitter, MV scale, reset and render size.
-- **Leftover Streamline files:** the install folder has Streamline DLLs that report version **2.13** (dated 27 Aug 2026), plus `nvngx_dlssg.dll` 310.8. All are NVIDIA-signed but the game doesn't use them. NVIDIA never published a 2.13 release (2.12 is followed by 2.14.x), so these are almost certainly from a mod.
-- **Old ReShade addon:** the crash dump also shows `renodx-dlss5.addon64` loaded. It isn't in the folder any more, and the user agreed to disable ReShade.
 - **Queues:** family 0 is graphics/compute/present ×16, family 2 is compute ×8. The device exposes `VK_NV_low_latency2`, `VK_NV_optical_flow` and `present_id/wait`.
 - **Present mode:** FIFO when vsync is on.
-- **Build tools:** no Visual Studio, CMake, Ninja or Vulkan SDK installed. The project folder `F:\Enshrouded FrameGen` is empty.
 
 **An existing mod already claims this.** "Enshrouded DLSS Frame Generation" by Biozilla (Nexus mod 141, v1.1.x, Oct 2026) claims real DLSS-G 2x–6x on Vulkan using the game's DLSS inputs. It's closed source, and one RTX 5090 user reports 4x–6x feeling laggy. Phase 0 checks it first, both as a baseline and so we know whether a custom build is worth the effort.
 
@@ -25,7 +24,7 @@ Build a **proxy `winmm.dll`** in C++ that loads from the game folder. The exe im
 
 **Why a proxy DLL and not a Vulkan layer:** SL's proxies call back into `vulkan-1.dll` exports. Inside a layer those calls re-enter the layer chain, and a proxy avoids that.
 
-### Repository layout (`F:\Enshrouded FrameGen`)
+### Repository layout (as planned)
 ```
 CMakeLists.txt
 external/   streamline-2.14.16 (headers + production signed DLLs), minhook, imgui, ngx headers (NVIDIA DLSS SDK), vulkan headers
@@ -46,15 +45,7 @@ Runtime files: `winmm.dll` and `EnshroudedFG.ini` go next to the exe. The SL DLL
 - **System:** confirm driver ≥ 595.97, hardware-accelerated GPU scheduling on, and Windows ≥ 19041.
 - **Optional test of Nexus 141:** record base and output FPS at 2x/4x/6x, latency, and UI artifacts. That gives a quality bar to beat, or a reason to stop here.
 
-**Phase 0 status (2026-10-17):**
-- ✅ Driver 616.92, which is at least 595.97.
-- ✅ Hardware-accelerated GPU scheduling is on (HwSchMode=2).
-- ✅ Windows build 26300.
-- ✅ The ReShade Vulkan layer is no longer registered. The implicit layers still registered are Steam, Fossilize, RTSS, OBS, EOS and GOG.
-- ✅ Moved the stray files into `backup/game-files-2026-10-17/`, with SHA-256 hashes in `manifest.csv`: 8× `sl.*` (2.13), `nvngx_dlssg`/`nvngx_dlssnr` 310.8, 3 license files and `ReShadePreset.ini`. Kept `nvngx_dlss.dll` 310.9.1, which came with the game's own 15 Oct update.
-- ✅ Steam verification finished and restored **none** of the moved files, so they were all from a mod. The clean install has only `nvngx_dlss.dll`, `steam_api64.dll` and the Aftermath DLL. Our mod will supply its own Streamline 2.14.16 and `nvngx_dlssg`.
-- ⏳ The user still needs to remove `--keep-vulkan-layers` in Steam → Enshrouded → Properties → Launch Options.
-- ⏳ Optional: a baseline test of Nexus 141, which the user downloads themselves.
+**Phase 0 status (2026-10-17):** done. Driver, GPU scheduling and Windows build all met the requirements. Leftover files from an earlier mod (Streamline 2.13 `sl.*`, `nvngx_dlssg`/`nvngx_dlssnr` 310.8, a ReShade preset) were removed and Steam verification confirmed they weren't the game's: a clean install ships only `nvngx_dlss.dll`, `steam_api64.dll` and the Aftermath DLL. The mod brings its own Streamline 2.14.16 and `nvngx_dlssg`.
 
 ### Phase 1: Toolchain and skeleton
 - **Install with winget:** VS 2022 Build Tools (Desktop C++ workload, Windows SDK), CMake, Ninja, Vulkan SDK.
@@ -141,7 +132,7 @@ Runtime files: `winmm.dll` and `EnshroudedFG.ini` go next to the exe. The SL DLL
 **Pitfalls fixed along the way**
 - **Device creation crash:** SL's `vkCreateDevice` proxy looks the instance up in a physical-device map that only SL's `vkEnumeratePhysicalDevices` proxy fills. We now call that proxy just before creating the device.
 - **Driver plugins:** the driver/NVIDIA App ships **OTA SL plugins** (`ProgramData\NVIDIA\NGX\models\sl_*_override_0\…\*.dll`, same 2.14.16 build) and SL prefers them. They are now registered as internal modules for the re-entry checks.
-- **DLSS reported unavailable:** SL initializes NGX first, using its plugin paths as the NGX feature search paths. The game's DLSS-SR then reported "not available", **and the game silently switched the saved setting to FSR3 with automatic render scale**; I restored the user's settings. Fix: the game folder is added to `pathsToPlugins`, and the game's `nvngx_dlss.dll` is hard-linked into `EnshroudedFG\streamline`, refreshed whenever it changes.
+- **DLSS reported unavailable:** SL initializes NGX first, using its plugin paths as the NGX feature search paths. The game's DLSS-SR then reported "not available", **and the game silently switched the saved setting to FSR3 with automatic render scale**; The setting had to be put back by hand. Fix: the game folder is added to `pathsToPlugins`, and the game's `nvngx_dlss.dll` is hard-linked into `EnshroudedFG\streamline`, refreshed whenever it changes.
 - **Init detour crash:** a pass-through detour must declare *at least* as many arguments as the hooked function. `NVSDK_NGX_VULKAN_Init_ProjectID_Ext` takes 11.
 
 **DLSS-G requirements we must honour in Phase 4**

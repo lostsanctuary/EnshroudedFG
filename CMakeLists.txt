@@ -10,6 +10,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Static CRT so the proxy has no VC++ redistributable dependency.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+foreach(dep external/minhook/include/MinHook.h external/imgui/imgui.h)
+    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${dep})
+        message(FATAL_ERROR "${dep} missing - run: git submodule update --init")
+    endif()
+endforeach()
+# NVIDIA's NGX headers are not redistributable in source form; tools/fetch_deps.ps1 downloads them.
+if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/external/ngx/include/nvsdk_ngx_vk.h)
+    message(FATAL_ERROR "NGX headers missing - run: powershell -ExecutionPolicy Bypass -File tools/fetch_deps.ps1")
+endif()
+
 add_subdirectory(external/minhook EXCLUDE_FROM_ALL)
 find_package(Vulkan REQUIRED COMPONENTS glslc)  # headers + shader compiler; vulkan-1 is resolved at runtime
 find_package(Python3 REQUIRED COMPONENTS Interpreter)

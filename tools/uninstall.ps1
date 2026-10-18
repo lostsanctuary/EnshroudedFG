@@ -1,10 +1,12 @@
 # Removes the proxy from the Enshrouded folder.
 # Pass -Purge to also delete the EnshroudedFG folder (Streamline DLLs, logs, settings).
 param(
-    [string]$GameDir = "F:\SteamLibrary\steamapps\common\Enshrouded",
+    [string]$GameDir = "",  # default: found through Steam
     [switch]$Purge
 )
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "find_game.ps1")
+$GameDir = Resolve-GameDir $GameDir
 if (Get-Process enshrouded -ErrorAction SilentlyContinue) { throw "Close Enshrouded before uninstalling." }
 $target = Join-Path $GameDir "winmm.dll"
 if (Test-Path $target) { Remove-Item $target -Force; Write-Host "Removed $target" }
