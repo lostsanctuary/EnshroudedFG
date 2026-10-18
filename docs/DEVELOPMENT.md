@@ -424,6 +424,29 @@ That's +4% at 2x and +24% at 6x, about 2.1 ms per frame at 6x.
 - **Log:** over about 3 minutes at 2x–6x, 4 fence waits (all in the first frames) and 0 timeouts.
 - **User test:** image quality and latency were unchanged.
 
+### Copy-pass GPU timing and narrower barriers (after v0.8.5, 2026-10-18)
+
+**Timing:** with `[Debug] VerboseLog=1`, each `CopyPass` creates a timestamp query pool.
+- **Timestamps:** a `BOTTOM_OF_PIPE` timestamp pair goes around each copy, kept in a 4-frame ring.
+- **Read-back:** the pair from 4 copies ago is read with `vkGetQueryPoolResults` (no WAIT; a result that isn't ready is skipped) just before its queries are reset and reused.
+- **Log line:** every 600 frames, `copy passes GPU time: depth … mvec … hudless …; total … us per frame (frame … ms)`.
+- **When off:** no query pool is created.
+
+**Barrier:** the barrier after each copy used to have `ALL_COMMANDS` as its destination stage. It now waits only for `COMPUTE_SHADER | TRANSFER`, the stages where DLSS-G reads the copies. On its own queues those reads are ordered by Streamline's semaphores anyway. The game's next graphics work no longer waits for our dispatch.
+
+**Measured (RTX 5090, 1080p DLSS Quality, 6x, parallel mode, about 90 s, 15 full 600-frame windows):**
+
+| Pass | Average per frame |
+|---|---|
+| Depth (1280×720 → R32F) | ~12.8 µs (12.1–15.9) |
+| Motion vectors (1280×720 → RG16F) | ~10.6 µs (9.2–14.8) |
+| HUD-less (1920×1080 → RGBA8) | ~20.7 µs (19.1–22.5) |
+| **Total** | **~44 µs (41.5–48.7)**, about 0.5% of the 8.4–9.9 ms frame |
+
+- **Max values of 200–2,100 µs:** these are measurement artifacts, not cost. `BOTTOM_OF_PIPE` timestamps also count time the GPU spends on other work in between, such as DLSS-G on its own queues in parallel mode. The spikes hit all three passes at random while the averages stay flat.
+- **Conclusion:** removing the copies entirely would give back at most ~0.5%. The rest of frame generation's overhead is DLSS-G's own GPU work. The barrier change is too small to show in fps.
+
+## Key risks
 - **Manual hooking:** SL Vulkan manual hooking is documented as "advanced integration only". Running an injected `sl.interposer` next to the game's own NGX instance is untested, so Phase 3 is the go/no-go gate.
 - **Camera matrices:** the approximation may not be good enough, and step B is a reverse-engineering effort of unknown size.
 - **Latency at high multipliers:** the community already reports this for 4x–6x. Reflex has to be correctly wired through SL.

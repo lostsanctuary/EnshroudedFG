@@ -10,6 +10,12 @@ Settings are kept across versions. Unless noted, the defaults stay `Multiplier=2
      and start a new empty [Unreleased] above it: the Release workflow refuses a tag whose version
      has no "## [x.y.z]" section here. -->
 
+### Added
+- **Copy-pass GPU timing:** with `[Debug] VerboseLog=1`, the log shows every 600 frames how much GPU time the mod's own copies take (depth, motion vectors, HUD-less). With logging off it costs nothing. They measure about 44 µs per frame, around 0.5% of a 6x frame on an RTX 5090.
+
+### Changed
+- **Barrier after each copy:** the game's next rendering work no longer waits for the mod's copies to finish, only DLSS-G does. The gain is a few microseconds per frame.
+
 ## [0.8.5] - 2026-10-18
 
 ### Changed
