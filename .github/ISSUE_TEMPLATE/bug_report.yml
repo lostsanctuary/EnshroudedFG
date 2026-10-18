@@ -1,0 +1,68 @@
+name: Bug report
+description: Something doesn't work, crashes or looks wrong with frame generation on.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The two log files are the most useful part: please attach both.
+        They are in the game folder under `EnshroudedFG\` (in Steam: right-click Enshrouded > Manage > Browse local files).
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      placeholder: e.g. RTX 5080
+    validations:
+      required: true
+
+  - type: input
+    id: driver
+    attributes:
+      label: NVIDIA driver version
+      description: NVIDIA app or Control Panel > System Information.
+      placeholder: e.g. 616.92
+    validations:
+      required: true
+
+  - type: dropdown
+    id: multiplier
+    attributes:
+      label: Frame generation multiplier
+      description: The setting in the Insert menu when the problem happened.
+      options:
+        - "Off"
+        - 2x
+        - 3x
+        - 4x
+        - 5x
+        - 6x
+        - Auto
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: EnshroudedFG version
+      description: Shown in the title bar of the Insert menu.
+      placeholder: e.g. 0.8.3
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what you saw instead. Screenshots or a short clip help with visual problems.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: log.txt and sl.log
+      description: |
+        Drag `EnshroudedFG\log.txt` and `EnshroudedFG\sl.log` into this box to attach them.
+        Copy them right after the problem happens, before starting the game again: log.txt starts fresh on every launch.
+      placeholder: Drop both files here.
+    validations:
+      required: true
