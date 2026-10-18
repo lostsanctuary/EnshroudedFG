@@ -424,7 +424,7 @@ That's +4% at 2x and +24% at 6x, about 2.1 ms per frame at 6x.
 - **Log:** over about 3 minutes at 2x–6x, 4 fence waits (all in the first frames) and 0 timeouts.
 - **User test:** image quality and latency were unchanged.
 
-### Copy-pass GPU timing and narrower barriers (after v0.8.5, 2026-10-18)
+### v0.8.6: copy-pass GPU timing and narrower barriers (2026-10-18)
 
 **Timing:** with `[Debug] VerboseLog=1`, each `CopyPass` creates a timestamp query pool.
 - **Timestamps:** a `BOTTOM_OF_PIPE` timestamp pair goes around each copy, kept in a 4-frame ring.

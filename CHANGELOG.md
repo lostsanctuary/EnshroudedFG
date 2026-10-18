@@ -10,6 +10,8 @@ Settings are kept across versions. Unless noted, the defaults stay `Multiplier=2
      and start a new empty [Unreleased] above it: the Release workflow refuses a tag whose version
      has no "## [x.y.z]" section here. -->
 
+## [0.8.6] - 2026-10-18
+
 ### Added
 - **Copy-pass GPU timing:** with `[Debug] VerboseLog=1`, the log shows every 600 frames how much GPU time the mod's own copies take (depth, motion vectors, HUD-less). With logging off it costs nothing. They measure about 44 µs per frame, around 0.5% of a 6x frame on an RTX 5090.
 
@@ -82,7 +84,8 @@ Also contains the 0.8.2 changes, which had no release of their own.
   - **Logging:** each change is written to `EnshroudedFG\log.txt` (`auto: ...`).
   - **Opt-in:** Auto is not the default.
 
-[Unreleased]: https://github.com/lostsanctuary/EnshroudedFG/compare/v0.8.5...HEAD
+[Unreleased]: https://github.com/lostsanctuary/EnshroudedFG/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.6
 [0.8.5]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.5
 [0.8.4]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.4
 [0.8.3]: https://github.com/lostsanctuary/EnshroudedFG/releases/tag/v0.8.3
